@@ -1,0 +1,105 @@
+[workspace.package]
+version = "4.4.0"
+edition = "2021"
+authors = ["Airalab <research@robonomics.network>"]
+license = "Apache-2.0"
+homepage = "https://robonomics.network"
+repository = "https://github.com/airalab/robonomics"
+
+[package]
+name = "robonomics"
+description = "The Robonomics Network Omni Node."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "robonomics"
+path = "src/main.rs"
+
+[dependencies]
+polkadot-jemalloc-shim.workspace = true
+polkadot-omni-node-lib.workspace = true
+color-eyre.workspace = true
+rustls.workspace = true
+
+# Build static with Musl
+[target.'cfg(target_env = "musl")'.dependencies]
+rocksdb = { workspace = true, default-features = false, features = [
+  "bindgen-static",
+  "snappy",
+] }
+
+# Jemalloc enabled on Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+polkadot-jemalloc-shim = { workspace = true, features = ["jemalloc-allocator"] }
+
+[dev-dependencies]
+assert_cmd.workspace = true
+
+[build-dependencies]
+substrate-build-script-utils = { workspace = true, default-features = true }
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+
+[profile.production]
+inherits = "release"
+lto = true
+codegen-units = 1
+
+[workspace]
+members = [
+  "tools/libcps",
+]
+exclude = ["tools/robonet"]
+resolver = "2"
+
+[workspace.dependencies]
+libcps = { path = "./tools/libcps", default-features = false }
+robonet.path = "./tools/robonet"
+
+bs58 = "0.5.0"
+clap = { version = "4.2.5", features = ["derive"] }
+color-eyre = { version = "0.6.3", default-features = false }
+futures = { version = "0.3.21", features = ["thread-pool"] }
+jsonrpsee = { version = "0.24.7", features = ["server"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+thiserror = "1.0.43"
+async-trait = "0.1.71"
+anyhow = "1.0"
+tokio = { version = "1.40", features = ["full"] }
+env_logger = "0.11"
+log = "0.4"
+zombienet-sdk = "0.4.15"
+# Subxt 0.44 used by Polkadot SDK, update when it switch out
+subxt = "0.44"
+subxt-signer = "0.44"
+curve25519-dalek = "5.0"
+x25519-dalek = { version = "3.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.11"
+aes-gcm = "0.11"
+hkdf = "0.13"
+sha2 = "0.11"
+base64 = "0.22"
+hex = "0.4.3"
+toml = "1.1"
+rumqttc = "0.25"
+colored = "3.1"
+chrono = "0.4"
+indicatif = "0.18"
+assert_cmd = "2.0.14"
+easy-hex = "1.0"
+seahash = "4.1"
+rocksdb = { version = "0.24", default-features = false }
+polkadot-omni-node-lib = "0.18.0"
+polkadot-jemalloc-shim = "0.6.0"
+substrate-build-script-utils = "11.0.3"
+parity-scale-codec = "3.6.1"
+sp-core = "43.0.0"
+serde = "1.0.171"
+serde_json = "1.0.138"

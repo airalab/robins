@@ -1,0 +1,51 @@
+name: Tests
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    branches:
+    - 'release/*'
+    - 'master'
+  workflow_call:
+    outputs:
+      status:
+        description: "Status of the tests"
+        value: ${{ jobs.unit-tests.outputs.status == 'success' }}
+
+jobs:
+  static-checks:
+    uses: ./.github/workflows/static.yml
+
+  unit-tests:
+    needs: static-checks
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ job.status }}
+    steps:
+    - name: Checkout the source code
+      uses: actions/checkout@v5
+
+    - name: Install rust toolchain
+      uses: actions-rust-lang/setup-rust-toolchain@v1
+
+    - name: Install deps
+      run: |
+        sudo apt update
+        sudo apt -y install pkg-config protobuf-compiler libclang-dev
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest
+
+    - name: Run all workspace tests
+      run: cargo nextest run --workspace --locked

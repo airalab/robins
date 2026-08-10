@@ -1,0 +1,4 @@
+[env]
+# Speedup compilation and drop dependencies: no WASM build.
+# frame-storage-access-test-runtime requires wasm builds but used in benchmarks only
+SKIP_WASM_BUILD = "1"
