@@ -105,11 +105,11 @@ struct Cli {
 /// Top-level command tree (mirrors the Edge CLI specification).
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run the long-running gateway daemon (not yet implemented).
+    /// Run the long-running gateway daemon.
     Gw {
-        /// Captured arguments (parsing deferred until `gw` is implemented).
-        #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
-        args: Vec<String>,
+        /// Path to the gateway TOML configuration file.
+        #[arg(short, long, default_value = crate::config::DEFAULT_CONFIG_PATH)]
+        config: std::path::PathBuf,
     },
     /// Produce signed envelopes from local sources (not yet implemented).
     Node {
@@ -139,9 +139,7 @@ pub fn run() -> ExitCode {
     init_logging(&cli);
 
     let result = match cli.command {
-        Command::Gw { .. } => Err(CliError::runtime(
-            "`edge gw` is not yet implemented in this build",
-        )),
+        Command::Gw { config } => run_gateway(config),
         Command::Node { .. } => Err(CliError::runtime(
             "`edge node` is not yet implemented in this build",
         )),
@@ -161,6 +159,25 @@ pub fn run() -> ExitCode {
             ExitCode::from(err.code)
         }
     }
+}
+
+/// Load `config`, build a multi-threaded Tokio runtime, and run the gateway
+/// until it is asked to shut down.
+///
+/// Configuration errors map to exit code `2` (usage), while runtime failures
+/// (binding sockets, subsystem startup) map to exit code `1`.
+fn run_gateway(config: std::path::PathBuf) -> CliResult {
+    let config =
+        crate::config::Config::from_file(&config).map_err(|e| CliError::usage(e.to_string()))?;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| CliError::runtime(format!("failed to start async runtime: {e}")))?;
+
+    runtime
+        .block_on(crate::app::run(config))
+        .map_err(|e| CliError::runtime(format!("{e:#}")))
 }
 
 /// Configure `env_logger` from the global flags. Logs are written to `stderr`

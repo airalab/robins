@@ -75,8 +75,8 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen: "0.0.0.0:8080".parse().expect("valid default http listen"),
-            // 64 KiB is generous for a single signed envelope on an SBC.
+            listen: "0.0.0.0:3000".parse().expect("valid default http listen"),
+            // 64 KiB is generous for a single signed envelope.
             max_body_bytes: 64 * 1024,
         }
     }
@@ -126,7 +126,7 @@ impl Default for PubsubConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen: vec!["/ip4/0.0.0.0/tcp/0".to_string()],
+            listen: vec!["/ip4/0.0.0.0/tcp/64442".to_string()],
             topic: "sensors.social/v1".to_string(),
             reserved_peers: Vec::new(),
             min_connected_peers: 0,

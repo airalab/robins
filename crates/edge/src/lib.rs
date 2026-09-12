@@ -47,6 +47,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod app;
 pub mod auth;
 #[cfg(feature = "cli")]
 pub mod cli;

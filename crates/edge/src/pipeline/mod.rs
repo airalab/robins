@@ -221,6 +221,13 @@ impl Pipeline {
             received_at: message.received_at,
         });
 
+        tracing::info!(
+            sensor_id = %accepted.sensor_id,
+            envelope_id = %id,
+            transport,
+            "accepted envelope; publishing"
+        );
+
         self.fan_out(accepted).await;
     }
 

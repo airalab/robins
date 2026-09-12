@@ -146,14 +146,18 @@ fn tampered_envelope_fails_verification() {
 }
 
 #[test]
-fn gw_and_node_report_unimplemented() {
-    let (code, _, stderr) = run_edge(&["gw"], b"");
-    assert_eq!(code, 1);
-    assert!(stderr.contains("not yet implemented"), "stderr: {stderr}");
-
+fn node_reports_unimplemented() {
     let (code, _, stderr) = run_edge(&["node"], b"");
     assert_eq!(code, 1);
     assert!(stderr.contains("not yet implemented"), "stderr: {stderr}");
+}
+
+#[test]
+fn gw_missing_config_is_usage_error() {
+    // With no readable config at the (non-existent) path, `gw` fails fast with a
+    // usage error (exit 2) rather than starting the daemon.
+    let (code, _, stderr) = run_edge(&["gw", "--config", "/nonexistent/edge/gateway.toml"], b"");
+    assert_eq!(code, 2, "stderr: {stderr}");
 }
 
 #[test]
@@ -212,4 +216,41 @@ fn key_inspect_matches_generate_and_sign() {
     assert_eq!(verified["sensor_id"].as_str().unwrap(), ss58);
 
     let _ = std::fs::remove_file(&key);
+}
+
+#[test]
+fn config_generate_produces_valid_config() {
+    // Generating to stdout yields a TOML document that `config check` accepts.
+    let (code, stdout, _) = run_edge(&["config", "generate"], b"");
+    assert_eq!(code, 0);
+    assert!(stdout.contains("[http]"), "got: {stdout}");
+    assert!(stdout.contains("[pubsub]"), "got: {stdout}");
+
+    let dir = std::env::temp_dir();
+    let path = dir.join(format!("edge-it-gen-{}.toml", std::process::id()));
+    let path_str = path.to_str().unwrap();
+
+    let (code, _, stderr) = run_edge(&["config", "generate", "--output", path_str], b"");
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stderr.contains("wrote default configuration"),
+        "stderr: {stderr}"
+    );
+
+    let (code, check_out, _) = run_edge(&["config", "check", "--config", path_str], b"");
+    assert_eq!(code, 0);
+    assert!(check_out.contains("valid"), "got: {check_out}");
+
+    // Writing over an existing file requires --force.
+    let (code, _, stderr) = run_edge(&["config", "generate", "--output", path_str], b"");
+    assert_eq!(code, 2, "stderr: {stderr}");
+    assert!(stderr.contains("already exists"), "stderr: {stderr}");
+
+    let (code, _, _) = run_edge(
+        &["config", "generate", "--output", path_str, "--force"],
+        b"",
+    );
+    assert_eq!(code, 0);
+
+    let _ = std::fs::remove_file(&path);
 }

@@ -17,7 +17,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! HTTP ingress transport.
 //!
-//! Exposes a single endpoint, `POST /ingress`, that accepts a binary
+//! Exposes a single endpoint, `POST /v1/telemetry`, that accepts a binary
 //! Connectivity Protocol [`SignedEnvelope`] in the request body. The handler is
 //! deliberately minimal:
 //!
@@ -37,7 +37,7 @@
 use super::{IngressMessage, IngressSender, Transport, TransportMetadata};
 use crate::config::HttpConfig;
 use crate::observability::metrics::{INGRESS_RECEIVED_TOTAL, VALIDATION_REJECTED_TOTAL};
-use crate::protocol::decode_envelope;
+use crate::protocol::{decode_envelope, SensorId};
 use crate::shutdown::ShutdownSignal;
 use async_trait::async_trait;
 use axum::body::Bytes;
@@ -50,7 +50,7 @@ use std::time::SystemTime;
 use tokio::sync::mpsc::error::TrySendError;
 
 /// The single ingress route path.
-const INGRESS_PATH: &str = "/telemetry/v1";
+const INGRESS_PATH: &str = "/v1/telemetry";
 
 /// Shared handler state: the sending half of the bounded ingress channel.
 #[derive(Clone)]
@@ -120,8 +120,9 @@ pub async fn serve(
         .await
 }
 
-/// `POST /telemetry/v1` — accept a binary `SignedEnvelope` and enqueue it.
+/// `POST /v1/telemetry` — accept a binary `SignedEnvelope` and enqueue it.
 async fn ingest(State(state): State<HttpState>, body: Bytes) -> impl IntoResponse {
+    let byte_len = body.len();
     let envelope = match decode_envelope(&body) {
         Ok(envelope) => envelope,
         Err(err) => {
@@ -131,10 +132,14 @@ async fn ingest(State(state): State<HttpState>, body: Bytes) -> impl IntoRespons
                 "stage" => "decode",
             )
             .increment(1);
-            tracing::debug!(%err, "rejected malformed ingress body");
+            tracing::warn!(%err, byte_len, "rejected malformed ingress body");
             return (StatusCode::BAD_REQUEST, format!("invalid envelope: {err}"));
         }
     };
+
+    // The claimed sensor id (not yet cryptographically verified — that happens
+    // in the pipeline) is logged for traceability.
+    let sensor_id = SensorId::from_slice(&envelope.sensor_id).ok();
 
     let message = IngressMessage {
         envelope,
@@ -150,10 +155,21 @@ async fn ingest(State(state): State<HttpState>, body: Bytes) -> impl IntoRespons
                 "transport" => Transport::Http.as_str(),
             )
             .increment(1);
+            match sensor_id {
+                Some(sensor_id) => tracing::info!(
+                    %sensor_id,
+                    byte_len,
+                    "accepted telemetry envelope over http"
+                ),
+                None => tracing::info!(
+                    byte_len,
+                    "accepted telemetry envelope over http (unparsable sensor id)"
+                ),
+            }
             (StatusCode::ACCEPTED, "accepted".to_string())
         }
         Err(TrySendError::Full(_)) => {
-            tracing::warn!("ingress channel full; applying backpressure");
+            tracing::warn!(byte_len, "ingress channel full; applying backpressure");
             (
                 StatusCode::TOO_MANY_REQUESTS,
                 "ingress buffer full".to_string(),

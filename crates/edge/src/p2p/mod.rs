@@ -192,14 +192,14 @@ impl GossipNode {
     ///
     /// The node subscribes to the topic and begins listening/dialing when
     /// [`run`](Self::run) is awaited.
-    pub fn new(
+    pub async fn new(
         keypair: libp2p::identity::Keypair,
         config: GossipConfig,
         peers: PeerRegistry,
         health: Option<Health>,
         inbound: Option<mpsc::Sender<ReceivedMessage>>,
     ) -> std::io::Result<Self> {
-        let mut swarm = build_swarm(keypair)?;
+        let mut swarm = build_swarm(keypair).await?;
 
         let topic = gossipsub::IdentTopic::new(config.topic.clone());
         swarm
@@ -283,10 +283,10 @@ impl GossipNode {
         {
             Ok(_) => {
                 metrics::counter!(PUBLISH_TOTAL).increment(1);
-                tracing::debug!(envelope_id = %message.envelope_id, "published to gossipsub");
+                tracing::info!(envelope_id = %message.envelope_id, "published to gossipsub");
             }
             Err(gossipsub::PublishError::InsufficientPeers) => {
-                tracing::debug!(
+                tracing::warn!(
                     envelope_id = %message.envelope_id,
                     "no subscribed peers; message not published"
                 );
@@ -361,8 +361,13 @@ impl GossipNode {
     }
 }
 
-/// Construct the swarm with TCP + noise + yamux transport and the edge behaviour.
-fn build_swarm(keypair: libp2p::identity::Keypair) -> std::io::Result<Swarm<EdgeBehaviour>> {
+/// Construct the swarm with TCP + WebSocket(Secure) transports (noise + yamux)
+/// and the edge behaviour.
+///
+/// Both plain (`/ws`) and secure (`/wss`) WebSocket multiaddresses are supported
+/// in addition to raw `/tcp`, so the gateway can dial peers reached over
+/// TLS-terminated WebSocket endpoints (a common relay/ingress topology).
+async fn build_swarm(keypair: libp2p::identity::Keypair) -> std::io::Result<Swarm<EdgeBehaviour>> {
     fn to_io(err: impl std::fmt::Display) -> std::io::Error {
         std::io::Error::other(err.to_string())
     }
@@ -374,6 +379,9 @@ fn build_swarm(keypair: libp2p::identity::Keypair) -> std::io::Result<Swarm<Edge
             noise::Config::new,
             yamux::Config::default,
         )
+        .map_err(to_io)?
+        .with_websocket(noise::Config::new, yamux::Config::default)
+        .await
         .map_err(to_io)?
         .with_behaviour(build_behaviour)
         .map_err(to_io)?
@@ -498,6 +506,7 @@ mod tests {
             None,
             None,
         )
+        .await
         .unwrap();
         let (publish_tx, publish_rx) = mpsc::channel(8);
         let shutdown_a = crate::shutdown::ShutdownController::new();

@@ -1,0 +1,63 @@
+# Example Edge Gateway configuration.
+#
+# Copy to /etc/edge/gateway.toml (or pass with `edge gw --config <path>`) and
+# edit to taste. Generate a fresh default with `edge config generate` and
+# validate any file with `edge config check --config <path>`.
+#
+# Only the [http], [auth], [pubsub], [metrics] and [pipeline] sections are
+# active in the MVP build; [meshtastic], [ipfs], [blockchain] and [storage]
+# describe deferred subsystems and are shown here disabled for reference.
+
+# --- HTTP ingress -----------------------------------------------------------
+# Accepts signed protocol envelopes via `POST /telemetry/v1`.
+[http]
+enabled = true
+listen = "0.0.0.0:3000"
+# Reject bodies larger than this many bytes (64 KiB is ample for one envelope).
+max_body_bytes = 65536
+
+# --- Authentication ---------------------------------------------------------
+# Applied after cryptographic/protocol validation.
+#   mode = "none"      -> accept every valid envelope.
+#   mode = "whitelist" -> accept only sensor ids listed in `file`.
+[auth]
+mode = "none"
+# file = "/etc/edge/whitelist.txt"
+
+# --- GossipSub publisher ----------------------------------------------------
+# Publishes accepted envelopes to the libp2p pub/sub mesh.
+[pubsub]
+enabled = true
+listen = ["/ip4/0.0.0.0/tcp/64442"]
+topic = "sensors.social/v1"
+# Peers to dial and keep connected (bootstrap / relay multiaddrs).
+reserved_peers = []
+# Report /ready only once at least this many peers are connected (0 = always).
+min_connected_peers = 0
+# Persist a stable node identity so the peer id survives restarts.
+# identity_file = "/var/lib/edge/identity.key"
+
+# --- Operations server ------------------------------------------------------
+# Serves /health, /ready, /metrics (Prometheus) and /debug/peers.
+[metrics]
+listen = "127.0.0.1:9090"
+
+# --- Pipeline sizing --------------------------------------------------------
+# All internal channels are bounded to apply backpressure under load.
+[pipeline]
+ingress_buffer = 1024
+dedup_capacity = 8192
+dedup_ttl_secs = 300
+
+# --- Deferred subsystems (inactive in the MVP build) ------------------------
+[meshtastic]
+enabled = false
+
+[ipfs]
+enabled = false
+providers = []
+
+[blockchain]
+enabled = false
+
+[storage]
