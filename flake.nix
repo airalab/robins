@@ -23,6 +23,12 @@
 
     polkadot.url = "github:andresilva/polkadot.nix";
     polkadot.inputs.nixpkgs.follows = "nixpkgs";
+
+    robonomics.url = "github:airalab/robonomics";
+    robonomics.inputs.systems.follows = "systems";
+    robonomics.inputs.nixpkgs.follows = "nixpkgs";
+    robonomics.inputs.fenix.follows = "fenix";
+    robonomics.inputs.polkadot.follows = "polkadot";
   };
 
   outputs =
@@ -32,6 +38,7 @@
       systems,
       fenix,
       polkadot,
+      robonomics,
       ...
     }:
     let 
@@ -40,7 +47,7 @@
         (final: prev: {
           rust-toolchain = fenix.packages.${system}.fromToolchainFile { 
             file = ./rust-toolchain.toml;
-            sha256 = "sha256-A1abGIbOtcBSdrUMhDGrER3pRM1hQP4fp9gh3Y4PKc8=";
+            sha256 = "sha256-SBKjxhC6zHTu0SyJwxLlQHItzMzYZ71VCWQC2hOzpRY=";
           };
         })
       ];
@@ -55,26 +62,15 @@
         }
       );
 
-      lib = eachSystem (system: pkgs: {
-        mkDevShell = args: import ./shell.nix ({ inherit pkgs; } // args);
-      });
-
       devShells = eachSystem (
         system: pkgs: rec {
-          default = self.lib.${system}.mkDevShell {
+          default = robonomics.lib.${system}.mkDevShell {
             packages = with pkgs; [
-              openssl taplo actionlint cargo-nextest cargo-audit
-              psvm try-runtime-cli subxt-cli srtool-cli frame-omni-bencher
-              pkgs.polkadot polkadot-parachain
+              openssl taplo actionlint cargo-nextest cargo-audit cargo-machete
+              psvm pkgs.polkadot polkadot-parachain
             ];
             env.RUSTC_WRAPPER = pkgs.lib.getExe pkgs.sccache;
           }; 
-          benchmarking = self.lib.${system}.mkDevShell {
-            packages = with pkgs; [ frame-omni-bencher ];
-          }; 
-          robonet = with pkgs; mkShell {
-            buildInputs = [ robonomics libcps ];
-          };
         }
       );
 
