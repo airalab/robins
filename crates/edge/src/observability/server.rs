@@ -22,12 +22,13 @@
 //! transport and never touches envelope data.
 
 use super::health::Health;
+use crate::p2p::PeerRegistry;
 use crate::shutdown::ShutdownSignal;
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
 use std::net::SocketAddr;
 
@@ -38,17 +39,34 @@ struct OpsState {
     health: Health,
     /// Prometheus exposition renderer.
     metrics: PrometheusHandle,
+    /// Optional connected-peer registry backing `/debug/peers`.
+    peers: Option<PeerRegistry>,
 }
 
-/// Build the operations router.
+/// Build the operations router without peer diagnostics.
 ///
 /// Exposed so it can be exercised directly in tests without binding a socket.
 pub fn router(health: Health, metrics: PrometheusHandle) -> Router {
+    build_router(health, metrics, None)
+}
+
+/// Build the operations router including the `/debug/peers` provider.
+pub fn router_with_peers(health: Health, metrics: PrometheusHandle, peers: PeerRegistry) -> Router {
+    build_router(health, metrics, Some(peers))
+}
+
+/// Assemble the operations router with an optional peer registry.
+fn build_router(health: Health, metrics: PrometheusHandle, peers: Option<PeerRegistry>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
         .route("/metrics", get(metrics_handler))
-        .with_state(OpsState { health, metrics })
+        .route("/debug/peers", get(peers_handler))
+        .with_state(OpsState {
+            health,
+            metrics,
+            peers,
+        })
 }
 
 /// Bind `listen` and serve the operations endpoints until `shutdown` fires.
@@ -59,13 +77,14 @@ pub async fn serve(
     listen: SocketAddr,
     health: Health,
     metrics: PrometheusHandle,
+    peers: Option<PeerRegistry>,
     mut shutdown: ShutdownSignal,
 ) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let bound = listener.local_addr()?;
     tracing::info!(address = %bound, "operations server listening");
 
-    axum::serve(listener, router(health, metrics))
+    axum::serve(listener, build_router(health, metrics, peers))
         .with_graceful_shutdown(async move {
             shutdown.recv().await;
             tracing::info!("operations server shutting down");
@@ -99,6 +118,17 @@ async fn metrics_handler(State(state): State<OpsState>) -> impl IntoResponse {
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
         body,
     )
+}
+
+/// `GET /debug/peers` — JSON array of currently connected libp2p peers.
+///
+/// Returns an empty array when no GossipSub node is attached.
+async fn peers_handler(State(state): State<OpsState>) -> impl IntoResponse {
+    let peers = state
+        .peers
+        .map(|registry| registry.snapshot())
+        .unwrap_or_default();
+    (StatusCode::OK, Json(peers))
 }
 
 #[cfg(test)]
@@ -144,5 +174,25 @@ mod tests {
     async fn metrics_renders() {
         let (status, _body) = get(router(Health::new(), test_handle()), "/metrics").await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn debug_peers_reports_registry() {
+        use crate::p2p::PeerRegistry;
+        // Without a registry the endpoint returns an empty array.
+        let (status, body) = get(router(Health::new(), test_handle()), "/debug/peers").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "[]");
+
+        // With a registry the connected peer is reported.
+        let registry = PeerRegistry::new();
+        let peer = libp2p::identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id();
+        registry.on_connected(peer, None);
+        let router = router_with_peers(Health::new(), test_handle(), registry);
+        let (status, body) = get(router, "/debug/peers").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("peer_id"));
     }
 }

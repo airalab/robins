@@ -37,6 +37,7 @@
 //! - [`ingress`]: ingress transports (HTTP) producing the canonical message.
 //! - [`auth`]: authorization policies (none/whitelist) over verified sensors.
 //! - [`pipeline`]: verify → authorize → deduplicate → fan-out acceptance pipeline.
+//! - [`p2p`]: embedded libp2p node and GossipSub publisher.
 //! - [`observability`]: structured logging, metrics and health/readiness probes.
 //! - [`shutdown`]: coordinated graceful-shutdown primitive.
 //! - [`cli`]: command-line interface (feature `cli`, enabled by default).
@@ -52,6 +53,7 @@ pub mod cli;
 pub mod config;
 pub mod ingress;
 pub mod observability;
+pub mod p2p;
 pub mod pipeline;
 pub mod protocol;
 pub mod shutdown;
