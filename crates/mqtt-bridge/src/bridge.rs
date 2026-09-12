@@ -28,7 +28,7 @@
 //! ## Basic Configuration
 //!
 //! ```
-//! use libcps::mqtt::Config;
+//! use mqtt_bridge::Config;
 //!
 //! let config = Config {
 //!     broker: "mqtt://localhost:1883".to_string(),
@@ -44,7 +44,7 @@
 //! ## Loading from Configuration File
 //!
 //! ```no_run
-//! use libcps::mqtt::Config;
+//! use mqtt_bridge::Config;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! // Load config from TOML file
@@ -86,7 +86,8 @@
 //! ## Programmatic Usage
 //!
 //! ```no_run
-//! use libcps::{mqtt, blockchain};
+//! use libcps::blockchain;
+//! use mqtt_bridge as mqtt;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let blockchain_config = blockchain::Config {
@@ -144,9 +145,9 @@
 //! };
 //! ```
 
-use crate::blockchain::{BoundedVec, Client, Config as BlockchainConfig};
-use crate::crypto::{Cipher, CryptoScheme, EncryptedMessage, EncryptionAlgorithm};
-use crate::node::{Node, PayloadSet};
+use libcps::blockchain::{BoundedVec, Client, Config as BlockchainConfig};
+use libcps::crypto::{Cipher, CryptoScheme, EncryptedMessage, EncryptionAlgorithm};
+use libcps::node::{Node, PayloadSet};
 use anyhow::{anyhow, Result};
 use log::{debug, error, trace};
 use parity_scale_codec::Decode;
@@ -245,7 +246,7 @@ impl Config {
     /// # Examples
     ///
     /// ```no_run
-    /// # use libcps::mqtt::Config;
+    /// # use mqtt_bridge::Config;
     /// # fn example() -> anyhow::Result<()> {
     /// let config = Config::from_file("config.toml")?;
     /// # Ok(())
@@ -274,7 +275,7 @@ impl Config {
     /// # Examples
     ///
     /// ```no_run
-    /// # use libcps::mqtt::Config;
+    /// # use mqtt_bridge::Config;
     /// # async fn example() -> anyhow::Result<()> {
     /// let config = Config::from_file("config.toml")?;
     /// config.start().await?;
@@ -450,7 +451,8 @@ impl Config {
     /// # Examples
     ///
     /// ```no_run
-    /// # use libcps::{mqtt, blockchain::Config};
+    /// # use libcps::blockchain::Config;
+    /// # use mqtt_bridge as mqtt;
     /// # async fn example() -> anyhow::Result<()> {
     /// let blockchain_config = Config {
     ///     ws_url: "ws://localhost:9944".to_string(),
@@ -633,7 +635,8 @@ impl Config {
     /// # Examples
     ///
     /// ```no_run
-    /// # use libcps::{mqtt, blockchain::Config};
+    /// # use libcps::blockchain::Config;
+    /// # use mqtt_bridge as mqtt;
     /// # async fn example() -> anyhow::Result<()> {
     /// let blockchain_config = Config {
     ///     ws_url: "ws://localhost:9944".to_string(),
@@ -869,7 +872,7 @@ fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
 /// # Examples
 ///
 /// ```
-/// # use libcps::mqtt::parse_mqtt_url;
+/// # use mqtt_bridge::parse_mqtt_url;
 /// let (host, port) = parse_mqtt_url("mqtt://localhost:1883").unwrap();
 /// assert_eq!(host, "localhost");
 /// assert_eq!(port, 1883);

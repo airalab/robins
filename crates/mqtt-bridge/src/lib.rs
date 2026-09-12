@@ -15,18 +15,24 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! MQTT bridge configuration and implementation.
+//! # mqtt-bridge - MQTT bridge for Robonomics CPS
 //!
-//! This module provides configuration types and bridge implementations for
+//! This crate provides configuration types and bridge implementations for
 //! connecting to MQTT brokers and bridging messages between MQTT topics
-//! and blockchain nodes.
+//! and Robonomics blockchain nodes. It builds on top of [`libcps`] for
+//! blockchain access, cryptography, and node operations.
+//!
+//! Bidirectional communication is supported:
+//! - **Subscribe mode**: listen to MQTT topics and update blockchain node payloads
+//! - **Publish mode**: monitor blockchain events and publish to MQTT topics
+//! - **Config file mode**: manage multiple bridges from a TOML configuration file
 //!
 //! # Examples
 //!
 //! ## Configuration
 //!
 //! ```
-//! use libcps::mqtt::Config;
+//! use mqtt_bridge::Config;
 //!
 //! let config = Config {
 //!     broker: "mqtt://localhost:1883".to_string(),
@@ -42,7 +48,8 @@
 //! ## Subscribe Bridge
 //!
 //! ```no_run
-//! use libcps::{mqtt, blockchain::Config};
+//! use libcps::blockchain::Config;
+//! use mqtt_bridge as mqtt;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let blockchain_config = Config {
@@ -73,6 +80,9 @@
 //! # Ok(())
 //! # }
 //! ```
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod bridge;
 

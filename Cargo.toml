@@ -19,12 +19,14 @@ codegen-units = 1
 members = [
 "crates/node",
 "crates/libcps",
+"crates/mqtt-bridge",
 ]
 exclude = ["tools/robonet"]
 resolver = "2"
 
 [workspace.dependencies]
 libcps = { path = "./crates/libcps", default-features = false }
+mqtt-bridge = { path = "./crates/mqtt-bridge", default-features = false }
 robonet.path = "./crates/robonet"
 
 bs58 = "0.5.0"

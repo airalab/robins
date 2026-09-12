@@ -27,7 +27,7 @@ use subxt::utils::AccountId32;
 
 // Import from the library
 use libcps::crypto::{Cipher, EncryptionAlgorithm};
-use libcps::{blockchain, mqtt};
+use libcps::blockchain;
 
 // CLI-specific modules (display and commands)
 mod commands;
@@ -104,30 +104,6 @@ struct Cli {
     /// Logging level (off, error, warn, info, debug, trace)
     #[arg(short = 'l', long, env = "RUST_LOG", default_value = "warn")]
     log_level: String,
-
-    #[cfg(feature = "mqtt")]
-    /// MQTT broker URL
-    #[arg(
-        long,
-        env = "ROBONOMICS_MQTT_BROKER",
-        default_value = "mqtt://localhost:1883"
-    )]
-    mqtt_broker: String,
-
-    #[cfg(feature = "mqtt")]
-    /// MQTT username
-    #[arg(long, env = "ROBONOMICS_MQTT_USERNAME")]
-    mqtt_username: Option<String>,
-
-    #[cfg(feature = "mqtt")]
-    /// MQTT password
-    #[arg(long, env = "ROBONOMICS_MQTT_PASSWORD")]
-    mqtt_password: Option<String>,
-
-    #[cfg(feature = "mqtt")]
-    /// MQTT client ID
-    #[arg(long, env = "ROBONOMICS_MQTT_CLIENT_ID")]
-    mqtt_client_id: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -319,137 +295,6 @@ EXAMPLES:
         #[arg(short = 'f', long)]
         force: bool,
     },
-
-    /// MQTT bridge commands
-    #[cfg(feature = "mqtt")]
-    #[command(subcommand)]
-    Mqtt(MqttCommands),
-}
-
-#[cfg(feature = "mqtt")]
-#[derive(Subcommand)]
-enum MqttCommands {
-    /// Subscribe to MQTT topic and update node payload with received messages
-    #[command(
-        long_about = "Subscribe to MQTT topic and update node payload with received messages.
-
-Connects to MQTT broker, subscribes to a topic, and updates the blockchain node payload 
-with each received message. Supports real-time encryption for secure IoT integration.
-
-EXAMPLES:
-    # Subscribe to sensor data
-    cps mqtt subscribe 'sensors/temp01' 5
-
-    # Subscribe with encryption (SR25519)
-    cps mqtt subscribe 'sensors/temp01' 5 \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
-
-    # Subscribe with ED25519 encryption (Home Assistant compatible)
-    cps mqtt subscribe 'homeassistant/sensor/temp' 5 \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY \\
-        --scheme ed25519
-
-    # Subscribe with specific cipher
-    cps mqtt subscribe 'sensors/temp01' 5 \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY \\
-        --cipher aesgcm256
-
-BEHAVIOR:
-    - Connects to MQTT broker
-    - Subscribes to specified topic
-    - On each message: updates node payload on blockchain
-    - Displays colorful logs with timestamps for each update
-    - Auto-reconnects on connection failures"
-    )]
-    Subscribe {
-        /// MQTT topic to subscribe to
-        topic: String,
-
-        /// Node ID to update
-        node_id: u64,
-
-        /// Receiver public key or SS58 address for encryption. If provided, messages will be encrypted.
-        /// Supports both SS58 addresses and hex-encoded public keys.
-        #[arg(short = 'r', long)]
-        receiver_public: Option<String>,
-
-        /// Encryption algorithm (xchacha20, aesgcm256, chacha20)
-        #[arg(long, default_value = "xchacha20")]
-        cipher: String,
-
-        /// Cryptographic scheme for encryption (sr25519, ed25519)
-        #[arg(long, default_value = "sr25519", value_parser = clap::value_parser!(libcps::crypto::CryptoScheme))]
-        scheme: libcps::crypto::CryptoScheme,
-    },
-
-    /// Publish node payload changes to MQTT topic
-    #[command(long_about = "Publish node payload changes to MQTT topic.
-
-Monitors blockchain node for PayloadSet events and publishes payload changes to MQTT topic
-in real-time. Event-driven approach ensures efficient operation without unnecessary queries.
-
-EXAMPLES:
-    # Publish node changes
-    cps mqtt publish 'actuators/valve01' 10
-
-    # With explicit broker configuration
-    cps mqtt publish 'actuators/valve01' 10 \\
-        --mqtt-broker mqtt://broker.local:1883 \\
-        --mqtt-username user \\
-        --mqtt-password pass
-
-BEHAVIOR:
-    - Subscribes to finalized blockchain blocks
-    - Monitors PayloadSet events for the specified node
-    - Only queries and publishes when payload actually changes
-    - Automatically decrypts encrypted payloads
-    - Displays colorful logs with timestamps and block numbers
-    - Auto-reconnects on connection failures
-
-TECHNICAL DETAILS:
-    - Event-driven monitoring (no polling)
-    - Real-time payload change detection
-    - Graceful shutdown on exit")]
-    Publish {
-        /// MQTT topic to publish to
-        topic: String,
-
-        /// Node ID to monitor
-        node_id: u64,
-
-        /// Decrypt encrypted blockchain payloads before publishing to MQTT
-        /// The encryption algorithm and scheme are auto-detected from the encrypted data
-        #[arg(short = 'd', long)]
-        decrypt: bool,
-    },
-
-    /// Start MQTT bridge from configuration file
-    #[command(long_about = "Start MQTT bridge from configuration file.
-
-Reads MQTT and blockchain configuration from a TOML file and starts all
-configured subscribe and publish bridges concurrently.
-
-EXAMPLES:
-    # Start from config file
-    cps mqtt start -c config.toml
-    
-    # With custom config path
-    cps mqtt start --config /etc/cps/mqtt.toml
-
-CONFIGURATION FILE FORMAT:
-    See examples/mqtt_config.toml for a complete example.
-
-BEHAVIOR:
-    - Loads configuration from TOML file
-    - Validates all settings
-    - Spawns concurrent tasks for all bridges
-    - Runs indefinitely until interrupted
-    - Auto-reconnects on failures")]
-    Start {
-        /// Path to TOML configuration file
-        #[arg(short = 'c', long)]
-        config: String,
-    },
 }
 
 #[tokio::main]
@@ -464,18 +309,6 @@ async fn main() -> Result<()> {
     let blockchain_config = blockchain::Config {
         ws_url: cli.ws_url.clone(),
         suri: cli.suri.clone(),
-    };
-
-    #[cfg(feature = "mqtt")]
-    // Create MQTT config
-    let mqtt_config = mqtt::Config {
-        broker: cli.mqtt_broker.clone(),
-        username: cli.mqtt_username.clone(),
-        password: cli.mqtt_password.clone(),
-        client_id: cli.mqtt_client_id.clone(),
-        blockchain: None,      // Not used for CLI commands
-        subscribe: Vec::new(), // Not used for CLI commands
-        publish: Vec::new(),   // Not used for CLI commands
     };
 
     // Execute commands
@@ -615,74 +448,6 @@ async fn main() -> Result<()> {
         Commands::Remove { node_id, force } => {
             commands::remove::execute(&blockchain_config, node_id, force).await?;
         }
-        #[cfg(feature = "mqtt")]
-        Commands::Mqtt(mqtt_cmd) => match mqtt_cmd {
-            MqttCommands::Subscribe {
-                topic,
-                node_id,
-                receiver_public,
-                cipher,
-                scheme,
-            } => {
-                // Parse receiver public key if provided (supports both SS58 address and hex)
-                let receiver_pub_bytes = if let Some(ref addr_or_hex) = receiver_public {
-                    Some(parse_receiver_public_key(addr_or_hex)?)
-                } else {
-                    None
-                };
-
-                // Create cipher if encryption is requested
-                let (cipher_opt, algorithm_opt) = if receiver_public.is_some() {
-                    let algorithm = EncryptionAlgorithm::from_str(&cipher)
-                        .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))?;
-                    let suri = cli
-                        .suri
-                        .ok_or_else(|| anyhow::anyhow!("SURI required for encryption"))?;
-                    (Some(Cipher::new(suri, scheme)?), Some(algorithm))
-                } else {
-                    (None, None)
-                };
-                commands::mqtt::subscribe(
-                    &blockchain_config,
-                    cipher_opt.as_ref(),
-                    &mqtt_config,
-                    &topic,
-                    node_id,
-                    receiver_pub_bytes,
-                    algorithm_opt,
-                )
-                .await?;
-            }
-            MqttCommands::Publish {
-                topic,
-                node_id,
-                decrypt,
-            } => {
-                commands::mqtt::publish(&blockchain_config, &mqtt_config, &topic, node_id, decrypt)
-                    .await?;
-            }
-            MqttCommands::Start { config } => {
-                // Load config from file and start all bridges
-                display::progress(&format!("Loading configuration from {}...", config));
-                let mqtt_config = mqtt::Config::from_file(&config)?;
-                display::success("Configuration loaded successfully");
-
-                // Validate that blockchain config is present
-                if mqtt_config.blockchain.is_none() {
-                    return Err(anyhow::anyhow!(
-                        "Configuration file must include [blockchain] section with ws_url"
-                    ));
-                }
-
-                display::info(&format!(
-                    "Starting {} subscribe bridge(s) and {} publish bridge(s)...",
-                    mqtt_config.subscribe.len(),
-                    mqtt_config.publish.len()
-                ));
-
-                mqtt_config.start().await?;
-            }
-        },
     }
 
     Ok(())

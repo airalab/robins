@@ -1,6 +1,6 @@
 [package]
 name = "libcps"
-version = "0.4.0"
+version = "0.5.0"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -42,9 +42,6 @@ aes-gcm.workspace = true
 hkdf.workspace = true
 sha2.workspace = true
 
-# MQTT
-rumqttc = { workspace = true, optional = true }
-
 # CLI & Output
 clap = { workspace = true, features = ["env"], optional = true }
 colored = { workspace = true, optional = true }
@@ -54,8 +51,6 @@ indicatif = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 easy-hex.workspace = true
-toml.workspace = true
-toml.optional = true
 base64.workspace = true
 bs58.workspace = true
 hex.workspace = true
@@ -63,17 +58,14 @@ hex.workspace = true
 # Async
 tokio.workspace = true
 anyhow.workspace = true
-chrono.workspace = true
-chrono.optional = true
 
 # Logging
 log.workspace = true
 env_logger = { workspace = true, optional = true }
 
 [features]
-default = ["mqtt", "cli"]
-mqtt = ["dep:rumqttc", "dep:toml"]
-cli = ["mqtt", "clap", "colored", "chrono", "indicatif", "env_logger"]
+default = ["cli"]
+cli = ["clap", "colored", "indicatif", "env_logger"]
 
 [package.metadata.docs.rs]
 all-features = true

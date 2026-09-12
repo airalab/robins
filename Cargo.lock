@@ -6232,14 +6232,13 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libcps"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aes-gcm 0.11.1",
  "anyhow",
  "base64 0.22.1",
  "bs58",
  "chacha20poly1305 0.11.0",
- "chrono",
  "clap",
  "colored",
  "curve25519-dalek 5.0.0",
@@ -6250,7 +6249,6 @@ dependencies = [
  "indicatif",
  "log",
  "parity-scale-codec",
- "rumqttc",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -6258,7 +6256,6 @@ dependencies = [
  "subxt",
  "subxt-signer",
  "tokio",
- "toml 1.1.6+spec-1.1.0",
  "x25519-dalek 3.0.0",
 ]
 
@@ -7226,6 +7223,27 @@ dependencies = [
  "smallvec",
  "tagptr",
  "uuid",
+]
+
+[[package]]
+name = "mqtt-bridge"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "colored",
+ "env_logger",
+ "hex",
+ "libcps",
+ "log",
+ "parity-scale-codec",
+ "rumqttc",
+ "serde",
+ "serde_json",
+ "subxt",
+ "tokio",
+ "toml 1.1.6+spec-1.1.0",
 ]
 
 [[package]]

@@ -26,7 +26,7 @@ use anyhow::Result;
 use colored::*;
 use libcps::blockchain::Config;
 use libcps::crypto::Cipher;
-use libcps::mqtt;
+use mqtt_bridge as mqtt;
 use subxt::utils::AccountId32;
 
 /// Subscribe to an MQTT topic and update blockchain node payload (CLI wrapper).

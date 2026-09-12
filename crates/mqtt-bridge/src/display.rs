@@ -15,11 +15,21 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! CLI command implementations.
+//! Display utilities for CLI output.
 
-pub mod create;
-pub mod move_node;
-pub mod remove;
-pub mod set_meta;
-pub mod set_payload;
-pub mod show;
+use colored::*;
+
+/// Display a success message
+pub fn success(msg: &str) {
+    println!("{} {}", "[+]".green().bold(), msg.green());
+}
+
+/// Display an info message
+pub fn info(msg: &str) {
+    println!("{} {}", "[i]".blue().bold(), msg.bright_blue());
+}
+
+/// Display a progress message
+pub fn progress(msg: &str) {
+    println!("{} {}", "[~]".cyan().bold(), msg.cyan());
+}

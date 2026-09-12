@@ -26,7 +26,6 @@
 //!
 //! - **Blockchain Integration**: Seamless interaction with Robonomics blockchain via subxt
 //! - **Encryption**: XChaCha20-Poly1305 AEAD encryption with sr25519 key derivation
-//! - **MQTT Bridge**: Bidirectional IoT device communication
 //! - **Type Safety**: Strongly-typed APIs matching the CPS pallet
 //! - **Async Support**: Built on tokio for efficient async operations
 //!
@@ -56,7 +55,6 @@
 //!
 //! - [`blockchain`]: Blockchain client and connection management
 //! - [`crypto`]: Encryption and key derivation utilities
-//! - [`mqtt`]: MQTT bridge configuration and types (optional feature)
 //! - [`node`]: Node-oriented API with type definitions and async methods for CPS operations
 //!
 //! ## Encryption
@@ -93,104 +91,23 @@
 //!
 //! ## MQTT Bridge
 //!
-//! Configure and use MQTT bridge for IoT integration:
-//!
-//! ```no_run
-//! use libcps::{mqtt, blockchain::Config};
-//!
-//! # async fn example() -> anyhow::Result<()> {
-//! // Configure MQTT connection
-//! let mqtt_config = mqtt::Config {
-//!     broker: "mqtt://localhost:1883".to_string(),
-//!     username: Some("user".to_string()),
-//!     password: Some("pass".to_string()),
-//!     client_id: Some("my-client".to_string()),
-//!     blockchain: None,
-//!     subscribe: Vec::new(),
-//!     publish: Vec::new(),
-//! };
-//!
-//! // Configure blockchain connection
-//! let blockchain_config = Config {
-//!     ws_url: "ws://localhost:9944".to_string(),
-//!     suri: Some("//Alice".to_string()),
-//! };
-//!
-//! // Subscribe to MQTT and update blockchain using Config method
-//! mqtt_config.subscribe(
-//!     &blockchain_config,
-//!     None,              // No encryption
-//!     "sensors/temp",    // MQTT topic
-//!     1,                 // Node ID
-//!     None,              // No receiver public key
-//!     None,              // No algorithm
-//!     None,              // No custom message handler
-//! ).await?;
-//!
-//! // Or publish blockchain changes to MQTT using Config method
-//! mqtt_config.publish(
-//!     &blockchain_config,
-//!     None,               // Optional cipher for decryption
-//!     "actuators/status", // MQTT topic
-//!     1,                  // Node ID
-//!     None,               // No custom publish handler
-//! ).await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Configuration File Support
-//!
-//! Manage multiple bridges with a TOML configuration file:
-//!
-//! ```no_run
-//! use libcps::mqtt::Config;
-//!
-//! # async fn example() -> anyhow::Result<()> {
-//! // Load configuration from file
-//! let config = Config::from_file("mqtt_config.toml")?;
-//!
-//! // Start all configured bridges concurrently
-//! config.start().await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! Example configuration file:
-//! ```toml
-//! broker = "mqtt://localhost:1883"
-//!
-//! [blockchain]
-//! ws_url = "ws://localhost:9944"
-//! suri = "//Alice"
-//!
-//! [[subscribe]]
-//! topic = "sensors/temperature"
-//! node_id = 5
-//!
-//! [[publish]]
-//! topic = "actuators/valve"
-//! node_id = 10
-//! ```
-//!
-//! See [`mqtt`] module documentation and `examples/mqtt_config.toml` for more details.
+//! MQTT/IoT integration has moved to the dedicated `mqtt-bridge` crate, which
+//! depends on this library for blockchain, crypto, and node operations. See the
+//! `mqtt-bridge` crate documentation and its `examples/mqtt_config.toml` for
+//! configuration and usage details.
 //!
 //! ## Feature Flags
 //!
 //! The library supports optional features:
 //!
-//! - **`mqtt`** (default) - Enables MQTT bridge functionality
 //! - **`cli`** (default) - Enables CLI binary with colored output
 //!
 //! ```toml
-//! # All features (default)
+//! # Default (CLI enabled)
 //! libcps = "0.1.0"
 //!
-//! # Library only, no MQTT
+//! # Library only, no CLI
 //! libcps = { version = "0.1.0", default-features = false }
-//!
-//! # Library with MQTT only (no CLI)
-//! libcps = { version = "0.1.0", default-features = false, features = ["mqtt"] }
 //! ```
 //!
 //! ## Type Definitions
@@ -221,6 +138,4 @@
 
 pub mod blockchain;
 pub mod crypto;
-#[cfg(feature = "mqtt")]
-pub mod mqtt;
 pub mod node;

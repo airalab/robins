@@ -22,7 +22,7 @@
 //!
 //! Run with: cargo run --example mqtt_config_load
 
-use libcps::mqtt::Config;
+use mqtt_bridge::Config;
 
 fn main() -> anyhow::Result<()> {
     println!("MQTT Configuration File Loading Example");
