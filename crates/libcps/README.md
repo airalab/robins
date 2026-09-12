@@ -10,7 +10,7 @@ This crate provides two components:
 A reusable library for building applications that interact with the Robonomics CPS pallet.
 
 ### 2. **cps** (CLI Binary)
-A beautiful command-line interface for quick access to CPS pallet functionality.
+A command-line interface for quick access to CPS pallet functionality.
 
 ## ✨ Features
 

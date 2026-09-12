@@ -6,43 +6,6 @@ license = "Apache-2.0"
 homepage = "https://robonomics.network"
 repository = "https://github.com/airalab/robonomics"
 
-[package]
-name = "robonomics"
-description = "The Robonomics Network Omni Node."
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-repository.workspace = true
-build = "build.rs"
-
-[[bin]]
-name = "robonomics"
-path = "src/main.rs"
-
-[dependencies]
-polkadot-jemalloc-shim.workspace = true
-polkadot-omni-node-lib.workspace = true
-color-eyre.workspace = true
-rustls.workspace = true
-
-# Build static with Musl
-[target.'cfg(target_env = "musl")'.dependencies]
-rocksdb = { workspace = true, default-features = false, features = [
-  "bindgen-static",
-  "snappy",
-] }
-
-# Jemalloc enabled on Linux
-[target.'cfg(target_os = "linux")'.dependencies]
-polkadot-jemalloc-shim = { workspace = true, features = ["jemalloc-allocator"] }
-
-[dev-dependencies]
-assert_cmd.workspace = true
-
-[build-dependencies]
-substrate-build-script-utils = { workspace = true, default-features = true }
-
 [profile.release]
 panic = "unwind"
 opt-level = 3
@@ -53,13 +16,16 @@ lto = true
 codegen-units = 1
 
 [workspace]
-members = ["tools/libcps"]
+members = [
+"crates/node",
+"crates/libcps",
+]
 exclude = ["tools/robonet"]
 resolver = "2"
 
 [workspace.dependencies]
-libcps = { path = "./tools/libcps", default-features = false }
-robonet.path = "./tools/robonet"
+libcps = { path = "./crates/libcps", default-features = false }
+robonet.path = "./crates/robonet"
 
 bs58 = "0.5.0"
 clap = { version = "4.2.5", features = ["derive"] }

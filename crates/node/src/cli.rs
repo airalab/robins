@@ -79,14 +79,16 @@ struct RobonomicsChainSpecLoader;
 impl LoadSpec for RobonomicsChainSpecLoader {
     fn load_spec(&self, path: &str) -> Result<Box<dyn ChainSpec>, String> {
         Ok(Box::new(match path {
+            /*
             "" | "polkadot" => GenericChainSpec::from_json_bytes(
                 &include_bytes!("../chains/polkadot-parachain.raw.json")[..],
             )?,
             "kusama" => GenericChainSpec::from_json_bytes(
                 &include_bytes!("../chains/kusama-parachain.raw.json")[..],
             )?,
-            //"local" => robonomics_localnet_config()?,
-            //"dev" => robonomics_development_config()?,
+            "local" => robonomics_localnet_config()?,
+            "dev" => robonomics_development_config()?,
+            */
             path => GenericChainSpec::from_json_file(path.into())?,
         }))
     }
