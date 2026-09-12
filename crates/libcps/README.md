@@ -16,7 +16,6 @@ A command-line interface for quick access to CPS pallet functionality.
 
 - 🔐 **Multi-algorithm AEAD encryption** (XChaCha20-Poly1305, AES-256-GCM, ChaCha20-Poly1305)
 - 🔑 **Dual keypair support** (SR25519 for Substrate, ED25519 for IoT/Home Assistant)
-- 📡 **MQTT bridge** for IoT device integration (optional feature)
 - 🌲 **Hierarchical tree visualization** of CPS nodes (CLI)
 - ⚙️ **Flexible configuration** via environment variables or CLI args
 - 🔒 **Secure by design** with proper key management and ECDH key agreement
@@ -30,9 +29,9 @@ A command-line interface for quick access to CPS pallet functionality.
 ┌────────────────────────────────────────────────────┐
 │                    libcps CLI                      │
 ├────────────────────────────────────────────────────┤
-│  Commands │ Display │ Crypto │ Blockchain │ MQTT   │
+│      Commands │ Display │ Crypto │ Blockchain       │
 └────────────────────────────────────────────────────┘
-      ↓          ↓         ↓         ↓         ↓
+           ↓          ↓         ↓         ↓
 ┌────────────────────────────────────────────────────┐
 │                 libcps Library                     │
 ├──────────────┬──────────────┬──────────────────────┤
@@ -40,11 +39,11 @@ A command-line interface for quick access to CPS pallet functionality.
 │   - SR25519  │  - BoundedVec│  - subxt codegen     │
 │   - ED25519  │  - NodeId    │  - CPS pallet API    │
 └──────────────┴──────────────┴──────────────────────┘
-      ↓                              ↓
-┌─────────────────────┐    ┌─────────────────────────┐
-│  Substrate Node     │    │    MQTT Broker          │
-│  - CPS Pallet       │    │  - rumqttc client       │
-└─────────────────────┘    └─────────────────────────┘
+      ↓
+┌─────────────────────┐
+│  Substrate Node     │
+│  - CPS Pallet       │
+└─────────────────────┘
 ```
 
 ## 📦 Installation
@@ -62,21 +61,16 @@ libcps = "0.1.0"
 
 The library supports optional feature flags for flexible dependency management:
 
-- **`mqtt`** - Enables MQTT bridge functionality (enabled by default)
-- **`cli`** - Enables CLI binary with colored output (enabled by default)
+- **`cli`** - Enables the `cps` CLI binary with colored output and progress bars (enabled by default)
 
 ```toml
-# Default: all features enabled
+# Default: CLI feature enabled
 [dependencies]
 libcps = "0.1.0"
 
-# Library only, without MQTT
+# Library only, without CLI dependencies
 [dependencies]
 libcps = { version = "0.1.0", default-features = false }
-
-# Library with MQTT only (no CLI)
-[dependencies]
-libcps = { version = "0.1.0", default-features = false, features = ["mqtt"] }
 ```
 
 ### CLI Tool from Crates.io
@@ -123,9 +117,6 @@ export ROBONOMICS_WS_URL=ws://localhost:9944
 
 # Set your account (development account for testing)
 export ROBONOMICS_SURI=//Alice
-
-# Optional: Set MQTT broker
-export ROBONOMICS_MQTT_BROKER=mqtt://localhost:1883
 ```
 
 ### 2. Create your first node
@@ -256,46 +247,6 @@ cps remove 5
 cps remove 5 --force
 ```
 
-### `mqtt subscribe <topic> <node_id>`
-
-Subscribe to MQTT topic and update node payload with received messages.
-
-```bash
-# Subscribe to sensor data
-cps mqtt subscribe "sensors/temp01" 5
-
-# Subscribe with encryption (SR25519)
-cps mqtt subscribe "sensors/temp01" 5 --receiver-public <RECEIVER_ADDRESS>
-
-# Subscribe with ED25519 encryption (Home Assistant compatible)
-cps mqtt subscribe "homeassistant/sensor/temp" 5 --receiver-public <RECEIVER_ADDRESS> --scheme ed25519
-
-# Subscribe with specific cipher
-cps mqtt subscribe "sensors/temp01" 5 --receiver-public <RECEIVER_ADDRESS> --cipher aesgcm256
-```
-
-**Behavior:**
-- Connects to MQTT broker
-- Subscribes to specified topic
-- On each message: updates node payload
-- Displays colorful logs for each update
-
-### `mqtt publish <topic> <node_id>`
-
-Monitor node payload and publish changes to MQTT topic using event-driven architecture.
-
-```bash
-# Publish node changes
-cps mqtt publish "actuators/valve01" 10
-```
-
-**Behavior:**
-- Event-driven monitoring (subscribes to blockchain events)
-- Only queries and publishes when payload actually changes
-- Automatically decrypts encrypted payloads
-
-> See [MQTT Bridge](#-mqtt-bridge) section for detailed technical implementation.
-
 ## ⚙️ Configuration
 
 ### Environment Variables
@@ -308,12 +259,6 @@ export ROBONOMICS_WS_URL=ws://localhost:9944
 export ROBONOMICS_SURI=//Alice
 # Or use a seed phrase:
 # export ROBONOMICS_SURI="your twelve word seed phrase here goes like this"
-
-# MQTT configuration
-export ROBONOMICS_MQTT_BROKER=mqtt://localhost:1883
-export ROBONOMICS_MQTT_USERNAME=myuser
-export ROBONOMICS_MQTT_PASSWORD=mypass
-export ROBONOMICS_MQTT_CLIENT_ID=cps-cli
 ```
 
 ### CLI Arguments (override environment variables)
@@ -321,9 +266,6 @@ export ROBONOMICS_MQTT_CLIENT_ID=cps-cli
 ```bash
 cps --ws-url ws://localhost:9944 \
     --suri //Alice \
-    --mqtt-broker mqtt://localhost:1883 \
-    --mqtt-username myuser \
-    --mqtt-password mypass \
     show 0
 ```
 
@@ -514,335 +456,6 @@ The encryption scheme uses HKDF (RFC 5869) for deriving encryption keys from sha
 - **Key Independence**: Each (shared_secret, algorithm) pair → unique key
 - **Security Enhancement**: Constant salt strengthens key derivation even with low-entropy secrets
 
-## 📡 MQTT Bridge
-
-The MQTT bridge enables seamless IoT integration with real-time, event-driven synchronization. The bridge functionality is available both as a CLI command and as a library API.
-
-### Library API
-
-The MQTT bridge can be used programmatically from your Rust applications:
-
-```rust
-use libcps::{mqtt, blockchain::Config};
-
-// Subscribe Bridge: MQTT → Blockchain
-// Using Config method API
-mqtt_config.subscribe(
-    &blockchain_config,
-    None,              // Optional encryption cipher
-    "sensors/temp",    // MQTT topic
-    1,                 // Node ID
-    None,              // Optional receiver public key
-    None,              // Optional message handler callback
-).await?;
-
-// Publish Bridge: Blockchain → MQTT
-// Using Config method API
-mqtt_config.publish(
-    &blockchain_config,
-    None,               // Optional cipher for decryption
-    "actuators/status", // MQTT topic
-    1,                  // Node ID
-    None,               // Optional publish handler callback
-).await?;
-```
-
-See [`examples/mqtt_bridge.rs`](examples/mqtt_bridge.rs) for a complete working example.
-
-### Configuration File
-
-You can manage multiple bridges using a TOML configuration file. This is ideal for running multiple subscribe and publish bridges concurrently.
-
-#### CLI Usage
-
-```bash
-# Start all bridges from config file
-cps mqtt start -c mqtt_config.toml
-
-# With custom config path
-cps mqtt start --config /etc/cps/mqtt-bridge.toml
-```
-
-#### Configuration File Format
-
-```toml
-# MQTT Broker Configuration
-broker = "mqtt://localhost:1883"
-username = "myuser"  # Optional
-password = "mypass"  # Optional
-client_id = "cps-bridge"  # Optional
-
-# Blockchain Configuration
-[blockchain]
-ws_url = "ws://localhost:9944"
-suri = "//Alice"
-
-# Subscribe Topics (MQTT → Blockchain)
-[[subscribe]]
-topic = "sensors/temperature"
-node_id = 5
-
-[[subscribe]]
-topic = "sensors/humidity"
-node_id = 6
-receiver_public = "5GrwvaEF..."  # Optional encryption
-cipher = "xchacha20"  # Optional
-scheme = "sr25519"  # Optional
-
-# Publish Topics (Blockchain → MQTT)
-[[publish]]
-topic = "actuators/valve01"
-node_id = 10
-
-[[publish]]
-topic = "actuators/fan"
-node_id = 11
-
-# Publish with decryption (reads encrypted blockchain data, publishes decrypted to MQTT)
-# Algorithm and scheme are auto-detected from the encrypted data
-[[publish]]
-topic = "decrypted/sensor/data"
-node_id = 13
-decrypt = true
-```
-
-See [`examples/mqtt_config.toml`](examples/mqtt_config.toml) for a complete example.
-
-#### Library Usage
-
-```rust
-use libcps::mqtt::Config;
-
-// Load config from file
-let config = Config::from_file("mqtt_config.toml")?;
-
-// Start all bridges
-config.start().await?;
-```
-
-### Subscribe: MQTT → Blockchain
-
-Subscribe to MQTT topics and automatically update blockchain node payload with received messages.
-
-#### CLI Usage
-
-```bash
-# Basic subscription
-cps mqtt subscribe "sensors/temperature" 5
-
-# With SR25519 encryption (default)
-cps mqtt subscribe "sensors/temperature" 5 \
-    --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
-
-# With ED25519 encryption (Home Assistant compatible)
-cps mqtt subscribe "homeassistant/sensor/temperature" 5 \
-    --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY \
-    --scheme ed25519
-
-# With AES-GCM cipher
-cps mqtt subscribe "sensors/temperature" 5 \
-    --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY \
-    --cipher aesgcm256
-```
-
-#### Library Usage
-
-```rust
-use libcps::{mqtt, blockchain::Config};
-
-// Create a custom message handler for logging
-let handler = Box::new(|topic: &str, payload: &[u8]| {
-    println!("📥 Received on {}: {:?}", topic, payload);
-});
-
-// Using Config method API
-mqtt_config.subscribe(
-    &blockchain_config,
-    None,              // No encryption
-    "sensors/temp",
-    1,                 // node_id
-    None,              // No receiver public key
-    Some(handler),     // Custom message handler
-).await?;
-```
-
-**Flow:**
-```
-MQTT Topic → CPS CLI → Blockchain Node
-    ↓             ↓            ↓
-"22.5C"      Receive      Update Payload
-                         (encrypted if configured)
-```
-
-### Publish: Blockchain → MQTT
-
-Monitor blockchain node for payload changes and publish to MQTT topic in real-time using event-driven architecture.
-
-#### CLI Usage
-
-```bash
-# Basic publishing
-cps mqtt publish "actuators/valve" 10
-
-# With decryption (auto-detects algorithm from encrypted data)
-cps mqtt publish "sensors/encrypted" 10 --decrypt
-
-# With custom broker configuration
-cps mqtt publish "actuators/valve" 10 \
-    --mqtt-broker mqtt://broker.example.com:1883 \
-    --mqtt-username myuser \
-    --mqtt-password mypass
-```
-
-#### Library Usage
-
-```rust
-use libcps::{mqtt, blockchain::Config, crypto::Cipher};
-
-// Create cipher for decryption (optional)
-let cipher = Cipher::new(
-    "//Alice".to_string(),
-    crypto::CryptoScheme::Sr25519
-)?;
-
-// Create a custom publish handler for logging
-let handler = Box::new(|topic: &str, block_num: u32, data: &str| {
-    println!("📤 Published to {} at block #{}: {}", topic, block_num, data);
-});
-
-// Using Config method API with decryption
-mqtt_config.publish(
-    &blockchain_config,
-    Some(&cipher),     // Optional cipher for decryption
-    "actuators/status",
-    1,                 // node_id
-    Some(handler),     // Custom publish handler
-).await?;
-```
-
-**Technical Implementation:**
-- Subscribes to finalized blockchain blocks
-- Monitors `PayloadSet` events for target node
-- Only queries and publishes when payload actually changes (event-driven)
-- No polling overhead - reacts to blockchain events in real-time
-- Publishes to MQTT with QoS 0 (At Most Once)
-- Background event loop for MQTT auto-reconnection
-
-**Flow:**
-```text
-Blockchain PayloadSet Event → Detect Change → Query Node → Publish to MQTT
-          ↓                         ↓              ↓              ↓
-   (detected via event)      (node_id match)  (at block #)  (changed data)
-```
-
-### Example Output
-
-**Subscribe Command:**
-```
-[~] Connecting to MQTT broker...
-[+] Connected to mqtt://localhost:1883
-[i] Subscribed to topic: sensors/temp01
-[~] Listening for messages...
-
-[2025-12-04 10:30:15] Received: 22.5C
-[i] Encrypting with XChaCha20-Poly1305 using SR25519
-[+] Updated node 5 payload
-
-[2025-12-04 10:30:45] Received: 23.1C
-[i] Encrypting with XChaCha20-Poly1305 using SR25519
-[+] Updated node 5 payload
-```
-
-**Publish Command:**
-```
-[~] Connecting to blockchain...
-[+] Connected to ws://localhost:9944
-[~] Connecting to MQTT broker localhost:1883...
-[+] Connected to mqtt://localhost:1883
-[i] Monitoring node 10 payload on each block...
-
-[2025-12-04 10:31:20] Published to actuators/valve01 at block #1234: open
-[2025-12-04 10:31:50] Published to actuators/valve01 at block #1240: closed
-```
-
-### Authentication
-
-Configure MQTT credentials via environment variables or CLI flags:
-
-```bash
-# Environment variables
-export ROBONOMICS_MQTT_BROKER=mqtt://broker.example.com:1883
-export ROBONOMICS_MQTT_USERNAME=myuser
-export ROBONOMICS_MQTT_PASSWORD=mypassword
-export ROBONOMICS_MQTT_CLIENT_ID=cps-client-01
-
-# Or via CLI flags
-cps mqtt subscribe "topic" 5 \
-    --mqtt-broker mqtt://broker.example.com:1883 \
-    --mqtt-username myuser \
-    --mqtt-password mypassword
-```
-
-### Integration Examples
-
-#### Home Assistant Integration
-
-```bash
-# Subscribe to Home Assistant sensor (ED25519 compatible)
-cps mqtt subscribe "homeassistant/sensor/living_room/temperature" 100 \
-    --receiver-public <HOME_ASSISTANT_PUBLIC_KEY> \
-    --scheme ed25519 \
-    --cipher aesgcm256
-
-# Publish to Home Assistant actuator
-cps mqtt publish "homeassistant/switch/kitchen/light" 101
-```
-
-#### Industrial IoT
-
-```bash
-# Monitor encrypted machine telemetry
-cps mqtt subscribe "factory/line1/cnc001/telemetry" 200 \
-    --receiver-public <MACHINE_PUBLIC_KEY> \
-    --cipher xchacha20
-
-# Publish control commands
-cps mqtt publish "factory/line1/controller/commands" 201
-```
-
-#### Smart Building
-
-```bash
-# Create building hierarchy
-cps create --meta '{"type":"building","name":"HQ"}'               # Node 0
-cps create --parent 0 --meta '{"type":"floor","number":1}'       # Node 1
-cps create --parent 1 --meta '{"type":"room","name":"Server"}'   # Node 2
-
-# Bridge temperature sensor
-cps mqtt subscribe "building/floor1/server-room/temp" 2
-
-# Monitor and publish HVAC status
-cps mqtt publish "building/floor1/server-room/hvac" 2
-```
-
-### Error Handling
-
-The MQTT bridge handles various error scenarios gracefully:
-
-- **Connection Failures**: Auto-reconnect with 5-second delay
-- **Invalid Messages**: Logged and skipped
-- **Blockchain Errors**: Logged with timestamps
-- **Encryption Errors**: Descriptive error messages
-- **Graceful Shutdown**: Background tasks cleaned up on exit
-
-### Performance Considerations
-
-- **Event-Driven**: No unnecessary blockchain queries
-- **Efficient**: Only processes blocks with relevant events  
-- **Low Latency**: Real-time event detection
-- **Resource Efficient**: Minimal memory footprint
-- **Scalable**: Multiple instances can run simultaneously
-
 ## 🎯 Use Cases
 
 ### 1. IoT Sensor Network
@@ -853,9 +466,9 @@ cps create --meta '{"type":"building"}'
 cps create --parent 0 --meta '{"type":"floor","number":1}'
 cps create --parent 1 --meta '{"type":"room","name":"Server Room"}'
 
-# Bridge sensor data
-cps mqtt subscribe "sensors/room1/temp" 2
-cps mqtt subscribe "sensors/room1/humidity" 2
+# Bridge sensor data with the mqtt-bridge crate
+mqtt-bridge subscribe "sensors/room1/temp" 2
+mqtt-bridge subscribe "sensors/room1/humidity" 2
 ```
 
 ### 2. Smart Home Automation
@@ -866,8 +479,8 @@ cps create --meta '{"type":"home"}'
 cps create --parent 0 --meta '{"type":"room","name":"Kitchen"}'
 cps create --parent 1 --meta '{"type":"device","name":"Smart Light"}'
 
-# Control devices
-cps mqtt publish "devices/kitchen/light/state" 2
+# Control devices with the mqtt-bridge crate
+mqtt-bridge publish "devices/kitchen/light/state" 2
 ```
 
 ### 3. Industrial Monitoring
@@ -878,8 +491,8 @@ cps create --meta '{"type":"factory"}'
 cps create --parent 0 --meta '{"type":"line","name":"Assembly Line 1"}'
 cps create --parent 1 --meta '{"type":"machine","id":"CNC-001"}'
 
-# Monitor machine data with encryption
-cps mqtt subscribe "machines/cnc001/telemetry" 2 --receiver-public <RECEIVER_ADDRESS>
+# Monitor machine data with encryption via the mqtt-bridge crate
+mqtt-bridge subscribe "machines/cnc001/telemetry" 2 --receiver-public <RECEIVER_ADDRESS>
 ```
 
 ## 🛠️ Development
@@ -905,15 +518,11 @@ tools/libcps/
     │   ├── set_meta.rs
     │   ├── set_payload.rs
     │   ├── move_node.rs
-    │   ├── remove.rs
-    │   └── mqtt.rs
+    │   └── remove.rs
     ├── crypto/           # Encryption utilities
     │   ├── mod.rs        # Documentation and re-exports
     │   ├── types.rs      # CryptoScheme, EncryptionAlgorithm, EncryptedMessage
     │   └── cipher.rs     # Cipher implementation
-    ├── mqtt/             # MQTT bridge (optional feature)
-    │   ├── mod.rs
-    │   └── bridge.rs
     └── display/          # Pretty CLI output
         ├── mod.rs
         └── tree.rs
@@ -968,7 +577,6 @@ Apache-2.0
 - Use `//Alice`, `//Bob`, etc. for development accounts
 - Always backup your seed phrase in production
 - Test encryption with development keys first
-- Monitor MQTT bridge logs for debugging
 - Use `--help` on any command for more details
 
 ## 🐛 Troubleshooting
@@ -991,16 +599,6 @@ export ROBONOMICS_SURI=//Alice
 
 # Or pass it directly
 cps --suri //Alice create --meta '{"test":true}'
-```
-
-### MQTT Connection Issues
-
-```bash
-# Test MQTT broker
-mosquitto_pub -h localhost -t test -m "hello"
-
-# Check broker URL format
-export ROBONOMICS_MQTT_BROKER=mqtt://localhost:1883
 ```
 
 ---
