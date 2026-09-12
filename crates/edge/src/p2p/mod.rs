@@ -31,6 +31,10 @@
 //!   envelope bytes, incrementing [`PUBLISH_TOTAL`] on success.
 //!
 //! Identify and ping run alongside GossipSub for peer metadata and keep-alive.
+//!
+//! The node listens and dials over TCP as well as plain (`/ws`) and secure
+//! (`/wss`) WebSocket transports, all upgraded with noise + yamux, so peers
+//! reachable only via TLS-terminated WebSocket endpoints can be used.
 
 pub mod peers;
 
@@ -50,7 +54,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// libp2p protocol name advertised over the identify protocol.
-const IDENTIFY_PROTOCOL: &str = "/edge/connectivity/1.0.0";
+const IDENTIFY_PROTOCOL: &str = "/edge/id/1.0.0";
 /// How often disconnected reserved peers are re-dialed.
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
 /// How long an idle connection is kept before libp2p closes it.
@@ -548,6 +552,75 @@ mod tests {
         })
         .await
         .expect("message delivered to node B");
+
+        assert_eq!(received.data, message.raw_envelope.to_vec());
+
+        shutdown_a.trigger();
+        shutdown_b.trigger();
+        let _ = handle_a.await;
+        let _ = handle_b.await;
+    }
+
+    // Same delivery guarantee as above, but both nodes speak the WebSocket
+    // transport (`/ws`), exercising the `with_websocket` builder branch that also
+    // provides `/wss` dialing.
+    #[tokio::test]
+    async fn two_nodes_exchange_over_websocket() {
+        let listen: Multiaddr = "/ip4/127.0.0.1/tcp/0/ws".parse().unwrap();
+
+        let (addr_tx, mut addr_rx) = mpsc::channel(4);
+        let node_a = GossipNode::new(
+            load_or_create_identity(None).unwrap(),
+            test_config(vec![listen.clone()], vec![]),
+            PeerRegistry::new(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let (publish_tx, publish_rx) = mpsc::channel(8);
+        let shutdown_a = crate::shutdown::ShutdownController::new();
+        let handle_a = tokio::spawn(node_a.run(publish_rx, shutdown_a.subscribe(), Some(addr_tx)));
+
+        // The reported listen address must carry the `/ws` protocol.
+        let bound = timeout(Duration::from_secs(5), addr_rx.recv())
+            .await
+            .expect("node A listen address")
+            .expect("listen address present");
+        assert!(
+            bound
+                .iter()
+                .any(|p| matches!(p, libp2p::multiaddr::Protocol::Ws(_))),
+            "expected a websocket listen address, got {bound}"
+        );
+
+        let (inbound_tx, mut inbound_rx) = mpsc::channel(8);
+        let node_b = GossipNode::new(
+            load_or_create_identity(None).unwrap(),
+            test_config(vec![listen], vec![bound]),
+            PeerRegistry::new(),
+            None,
+            Some(inbound_tx),
+        )
+        .await
+        .unwrap();
+        let (_publish_tx_b, publish_rx_b) = mpsc::channel::<Arc<AcceptedMessage>>(8);
+        let shutdown_b = crate::shutdown::ShutdownController::new();
+        let handle_b = tokio::spawn(node_b.run(publish_rx_b, shutdown_b.subscribe(), None));
+
+        let message = accepted_message();
+        let received = timeout(Duration::from_secs(20), async {
+            loop {
+                let _ = publish_tx.send(Arc::clone(&message)).await;
+                if let Ok(Some(received)) =
+                    timeout(Duration::from_millis(300), inbound_rx.recv()).await
+                {
+                    break received;
+                }
+            }
+        })
+        .await
+        .expect("message delivered over websocket");
 
         assert_eq!(received.data, message.raw_envelope.to_vec());
 

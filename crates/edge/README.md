@@ -78,9 +78,9 @@ A fully commented example lives at [`examples/gateway.toml`](examples/gateway.to
 | `[auth]`     | `mode`                | `none`                     | `none` accepts all valid envelopes; `whitelist` gates. |
 |              | `file`                | —                          | Whitelist file (required for `whitelist`).             |
 | `[pubsub]`   | `enabled`             | `true`                     | Enable the GossipSub publisher.                        |
-|              | `listen`              | `["/ip4/0.0.0.0/tcp/64442"]` | libp2p listen multiaddrs.                            |
+|              | `listen`              | `["/ip4/0.0.0.0/tcp/64442"]` | libp2p listen multiaddrs (TCP or `/ws`).            |
 |              | `topic`               | `sensors.social/v1`        | Topic accepted envelopes are published to.             |
-|              | `reserved_peers`      | `[]`                       | Peers to dial and keep connected.                      |
+|              | `reserved_peers`      | `[]`                       | Peers to dial and keep connected (TCP/`/ws`/`/wss`).   |
 |              | `min_connected_peers` | `0`                        | Peers required before `/ready` reports ready.          |
 |              | `identity_file`       | —                          | Persist the node identity for a stable peer id.        |
 | `[metrics]`  | `listen`              | `127.0.0.1:9090`           | Operations server bind address.                        |

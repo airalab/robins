@@ -26,11 +26,15 @@ mode = "none"
 
 # --- GossipSub publisher ----------------------------------------------------
 # Publishes accepted envelopes to the libp2p pub/sub mesh.
+# Listen/dial addresses may use raw TCP or WebSocket transports:
+#   /ip4/0.0.0.0/tcp/64442            raw TCP
+#   /ip4/0.0.0.0/tcp/64443/ws         plain WebSocket
+#   /dns4/relay.example/tcp/443/wss   secure WebSocket (dial-only; TLS)
 [pubsub]
 enabled = true
 listen = ["/ip4/0.0.0.0/tcp/64442"]
 topic = "sensors.social/v1"
-# Peers to dial and keep connected (bootstrap / relay multiaddrs).
+# Peers to dial and keep connected (bootstrap / relay multiaddrs, incl. /wss).
 reserved_peers = []
 # Report /ready only once at least this many peers are connected (0 = always).
 min_connected_peers = 0
