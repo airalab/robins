@@ -73,3 +73,8 @@ serde_json = "1.0.138"
 ed25519-dalek = "2.1"
 rand = "0.8"
 bytes = "1.7"
+axum = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }

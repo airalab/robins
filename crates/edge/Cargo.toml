@@ -33,6 +33,11 @@ sha2.workspace = true
 sp-core.workspace = true
 ed25519-dalek.workspace = true
 rand.workspace = true
+axum.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
 clap = { workspace = true, features = ["env"], optional = true }
 env_logger = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
@@ -54,8 +59,10 @@ protoc-bin-vendored = { version = "3.1", optional = true }
 walkdir = { version = "2.5", optional = true }
 
 [dev-dependencies]
-# Used by the black-box CLI integration tests to parse `--output json` reports.
+# Used by the black-box CLI integration tests to parse `--output json` reports,
+# and by the observability tests to drive the ops router via `tower::oneshot`.
 serde_json.workspace = true
+tower = { version = "0.5", features = ["util"] }
 
 
 [features]

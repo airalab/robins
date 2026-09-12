@@ -26,7 +26,7 @@
 //! ## Architecture
 //!
 //! The protocol is canonical and transports are adapters: every ingress produces
-//! the same [`protocol::IngressMessage`], and authorization is always performed
+//! the same [`ingress::IngressMessage`], and authorization is always performed
 //! against the envelope `sensor_id` (never transport metadata). Internal message
 //! flow uses bounded channels to provide backpressure on constrained hardware.
 //!
@@ -34,6 +34,10 @@
 //!
 //! - [`protocol`]: canonical envelope type, identity, validation and message-id.
 //! - [`config`]: TOML + environment configuration.
+//! - [`ingress`]: ingress transports (HTTP) producing the canonical message.
+//! - [`auth`]: authorization policies (none/whitelist) over verified sensors.
+//! - [`pipeline`]: verify → authorize → deduplicate → fan-out acceptance pipeline.
+//! - [`observability`]: structured logging, metrics and health/readiness probes.
 //! - [`shutdown`]: coordinated graceful-shutdown primitive.
 //! - [`cli`]: command-line interface (feature `cli`, enabled by default).
 //!
@@ -42,8 +46,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod auth;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;
+pub mod ingress;
+pub mod observability;
+pub mod pipeline;
 pub mod protocol;
 pub mod shutdown;
