@@ -117,6 +117,7 @@ async fn http_ingress_is_published_over_gossip() {
         None,
         Some(inbound_tx),
     )
+    .await
     .expect("build verifier");
     let (_pub_tx, pub_rx) = mpsc::channel::<Arc<AcceptedMessage>>(1);
     let verifier_shutdown = ShutdownController::new();

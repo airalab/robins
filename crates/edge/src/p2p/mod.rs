@@ -527,6 +527,7 @@ mod tests {
             None,
             Some(inbound_tx),
         )
+        .await
         .unwrap();
         let (_publish_tx_b, publish_rx_b) = mpsc::channel::<Arc<AcceptedMessage>>(8);
         let shutdown_b = crate::shutdown::ShutdownController::new();
