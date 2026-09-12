@@ -1,6 +1,6 @@
 [package]
 name = "robonomics"
-description = "The Robonomics Network Omni Node."
+description = "The Robonomics Omni Node."
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

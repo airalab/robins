@@ -145,10 +145,10 @@
 //! };
 //! ```
 
+use anyhow::{anyhow, Result};
 use libcps::blockchain::{BoundedVec, Client, Config as BlockchainConfig};
 use libcps::crypto::{Cipher, CryptoScheme, EncryptedMessage, EncryptionAlgorithm};
 use libcps::node::{Node, PayloadSet};
-use anyhow::{anyhow, Result};
 use log::{debug, error, trace};
 use parity_scale_codec::Decode;
 use parity_scale_codec::Encode;

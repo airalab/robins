@@ -1,0 +1,72 @@
+///////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2018-2026 Robonomics Network <research@robonomics.network>
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+///////////////////////////////////////////////////////////////////////////////
+//! Build script for the `edge` crate.
+//!
+//! Protobuf code generation follows the same pattern as `meshtastic/rust`: the
+//! generated Rust module is committed to the repository and regeneration is an
+//! explicit, developer-only step gated behind the `gen` feature. Normal builds
+//! are a no-op here and simply `include!` the committed module, so consumers
+//! never need `protoc` on their `PATH`.
+
+#[cfg(not(feature = "gen"))]
+fn main() {}
+
+#[cfg(feature = "gen")]
+fn main() -> std::io::Result<()> {
+    // Vendored Connectivity Protocol sources and the committed output directory.
+    let proto_dir = "src/protobufs/";
+    let out_dir = "src/protocol/generated/";
+
+    println!("cargo:rerun-if-changed={proto_dir}");
+    println!("cargo:rerun-if-changed={out_dir}");
+
+    // Ship a `protoc` binary so regeneration works without a system install.
+    match protoc_bin_vendored::protoc_bin_path() {
+        Ok(protoc_path) => {
+            if std::env::var_os("PROTOC").is_some() {
+                println!("Using PROTOC set in the environment.");
+            } else {
+                println!("Setting PROTOC to the protoc-bin-vendored binary.");
+                std::env::set_var("PROTOC", protoc_path);
+            }
+        }
+        Err(err) => {
+            println!(
+                "cargo:warning=protoc-bin-vendored unavailable, relying on system protoc: {err}"
+            );
+        }
+    }
+
+    // Only the signed envelope is required by the gateway: telemetry payloads are
+    // opaque bytes forwarded through the pipeline untouched. Collect the relevant
+    // `.proto` files deterministically so regenerated output is stable.
+    let mut protos: Vec<_> = walkdir::WalkDir::new(proto_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(walkdir::DirEntry::into_path)
+        .filter(|p| p.extension().is_some_and(|ext| ext == "proto"))
+        .filter(|p| p.to_string_lossy().contains("crypto/v1/envelope.proto"))
+        .collect();
+    protos.sort();
+
+    std::fs::create_dir_all(out_dir)?;
+
+    let mut config = prost_build::Config::new();
+    config.out_dir(out_dir);
+    config.compile_protos(&protos, &[proto_dir])
+}

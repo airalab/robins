@@ -26,8 +26,8 @@ use std::str::FromStr;
 use subxt::utils::AccountId32;
 
 // Import from the library
-use libcps::crypto::{Cipher, EncryptionAlgorithm};
 use libcps::blockchain;
+use libcps::crypto::{Cipher, EncryptionAlgorithm};
 
 // CLI-specific modules (display and commands)
 mod commands;

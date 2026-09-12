@@ -17,9 +17,10 @@ codegen-units = 1
 
 [workspace]
 members = [
-"crates/node",
-"crates/libcps",
-"crates/mqtt-bridge",
+  "crates/robonomics",
+  "crates/libcps",
+  "crates/mqtt-bridge",
+  "crates/edge",
 ]
 exclude = ["tools/robonet"]
 resolver = "2"
@@ -69,3 +70,6 @@ parity-scale-codec = "3.6.1"
 sp-core = "43.0.0"
 serde = "1.0.171"
 serde_json = "1.0.138"
+ed25519-dalek = "2.1"
+rand = "0.8"
+bytes = "1.7"

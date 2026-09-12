@@ -1,0 +1,181 @@
+///////////////////////////////////////////////////////////////////////////////
+//
+//  Copyright 2018-2026 Robonomics Network <research@robonomics.network>
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+//
+///////////////////////////////////////////////////////////////////////////////
+//! Command-line interface for the `edge` gateway.
+//!
+//! The CLI is deliberately thin: every command reuses the canonical library
+//! logic ([`crate::protocol`], [`crate::config`]) and never re-implements crypto
+//! or parsing. Following Unix conventions, pipeline **data** goes to `stdout`
+//! while **logs and diagnostics** go to `stderr`, and secret material is never
+//! printed.
+//!
+//! ## Exit codes
+//!
+//! Commands map failures onto a stable status contract so they compose in
+//! scripts:
+//!
+//! - `0` — success.
+//! - `1` — runtime error (I/O, unimplemented mode, unexpected failure).
+//! - `2` — CLI usage or configuration error.
+//! - `3` — protocol / input error (malformed or invalid envelope).
+//!
+//! `codec verify` additionally distinguishes a cryptographically **invalid**
+//! envelope (`1`) from **malformed** input (`2`), matching the
+//! `edge codec verify` contract.
+
+mod codec;
+mod config;
+mod key;
+
+use clap::{Parser, Subcommand};
+use std::process::ExitCode;
+
+/// A CLI failure carrying the process exit code to surface to the shell.
+#[derive(Debug)]
+pub(crate) struct CliError {
+    /// Process exit code (see the module-level contract).
+    code: u8,
+    /// Human-readable message, written to `stderr`.
+    message: String,
+}
+
+impl CliError {
+    /// Runtime error (exit code `1`).
+    pub(crate) fn runtime(message: impl Into<String>) -> Self {
+        Self {
+            code: 1,
+            message: message.into(),
+        }
+    }
+
+    /// CLI usage or configuration error (exit code `2`).
+    pub(crate) fn usage(message: impl Into<String>) -> Self {
+        Self {
+            code: 2,
+            message: message.into(),
+        }
+    }
+
+    /// Explicit code with message (used to relay protocol exit codes).
+    pub(crate) fn with_code(code: u8, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+/// Result alias for CLI command handlers.
+pub(crate) type CliResult = Result<(), CliError>;
+
+/// Robonomics Edge Gateway — Connectivity Protocol ingress for edge devices.
+#[derive(Debug, Parser)]
+#[command(name = "edge", version, about, long_about = None)]
+struct Cli {
+    /// Log verbosity (`error`, `warn`, `info`, `debug`, `trace`).
+    #[arg(long, global = true, default_value = "info", env = "EDGE_LOG_LEVEL")]
+    log_level: String,
+
+    /// Disable ANSI colour in log output.
+    #[arg(long, global = true)]
+    no_color: bool,
+
+    /// Suppress non-error logs (equivalent to `--log-level error`).
+    #[arg(long, short, global = true)]
+    quiet: bool,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+/// Top-level command tree (mirrors the Edge CLI specification).
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Run the long-running gateway daemon (not yet implemented).
+    Gw {
+        /// Captured arguments (parsing deferred until `gw` is implemented).
+        #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+    /// Produce signed envelopes from local sources (not yet implemented).
+    Node {
+        /// Captured arguments (parsing deferred until `node` is implemented).
+        #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+    /// Encode, decode and inspect protocol messages.
+    #[command(subcommand)]
+    Codec(codec::CodecCommand),
+    /// Generate, inspect keys and sign or verify messages.
+    #[command(subcommand)]
+    Key(key::KeyCommand),
+    /// Validate and print gateway configuration.
+    #[command(subcommand)]
+    Config(config::ConfigCommand),
+    /// Print version information.
+    Version,
+}
+
+/// Parse arguments, initialise logging, dispatch, and return the exit code.
+///
+/// This is the single entry point used by `main`; it owns the mapping from a
+/// [`CliError`] to the process [`ExitCode`].
+pub fn run() -> ExitCode {
+    let cli = Cli::parse();
+    init_logging(&cli);
+
+    let result = match cli.command {
+        Command::Gw { .. } => Err(CliError::runtime(
+            "`edge gw` is not yet implemented in this build",
+        )),
+        Command::Node { .. } => Err(CliError::runtime(
+            "`edge node` is not yet implemented in this build",
+        )),
+        Command::Codec(cmd) => codec::run(cmd),
+        Command::Key(cmd) => key::run(cmd),
+        Command::Config(cmd) => config::run(cmd),
+        Command::Version => {
+            println!("edge {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("error: {}", err.message);
+            ExitCode::from(err.code)
+        }
+    }
+}
+
+/// Configure `env_logger` from the global flags. Logs are written to `stderr`
+/// so they never contaminate the data written to `stdout`.
+fn init_logging(cli: &Cli) {
+    let level = if cli.quiet { "error" } else { &cli.log_level };
+    env_logger::Builder::new()
+        .parse_filters(level)
+        .format_timestamp_millis()
+        .write_style(if cli.no_color {
+            env_logger::WriteStyle::Never
+        } else {
+            env_logger::WriteStyle::Auto
+        })
+        .target(env_logger::Target::Stderr)
+        .try_init()
+        .ok();
+}
