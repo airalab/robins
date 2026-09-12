@@ -83,7 +83,7 @@ pub async fn subscribe(
         println!(
             "[{}] {} Received from {}: {}",
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-            "📥".bright_green(),
+            "[<]".bright_green().bold(),
             topic_clone.bright_cyan(),
             payload_str.bright_white()
         );
@@ -94,7 +94,7 @@ pub async fn subscribe(
         mqtt_config.broker.bright_white()
     ));
     display::info(&format!(
-        "📡 Listening for messages on {}...",
+        "Listening for messages on {}...",
         topic.bright_cyan()
     ));
 
@@ -142,7 +142,7 @@ pub async fn publish(
     }
 
     display::info(&format!(
-        "🔄 Monitoring node {} payload on each block...",
+        "Monitoring node {} payload on each block...",
         node_id.to_string().bright_cyan()
     ));
 
@@ -167,7 +167,7 @@ pub async fn publish(
         println!(
             "[{}] {} Published to {} at block #{}: {}",
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-            "📤".bright_blue(),
+            "[>]".bright_blue().bold(),
             topic_clone.bright_cyan(),
             block_num.to_string().bright_white(),
             display_data.bright_white()
