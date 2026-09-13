@@ -114,39 +114,35 @@ struct Cli {
     command: Command,
 }
 
-/// Top-level command tree (mirrors the Edge CLI specification).
+/// Top-level command tree.
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run the long-running gateway daemon.
-    #[command(alias = "gw")]
+    /// Run the long-running gateway daemon [ALIAS: g].
+    #[command(alias = "g")]
     Gateway {
         /// Path to the gateway TOML configuration file.
         #[arg(short, long, default_value = crate::config::DEFAULT_CONFIG_PATH)]
         config: std::path::PathBuf,
     },
-    /// Produce signed envelopes from local sources (not yet implemented).
+    /// Produce signed envelopes from local sources !!! not yet implemented !!!.
     #[command(alias = "s")]
     Sensor {
-        /// Captured arguments (parsing deferred until `node` is implemented).
+        /// Captured arguments (parsing deferred until implemented).
         #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
         args: Vec<String>,
     },
-    /// Encode or decode a `crypto.v1.SignedEnvelope` (auto-detects direction).
+    /// Encode or decode a `SignedEnvelope` [ALIAS: e].
     #[command(alias = "e")]
     Envelope(envelope::EnvelopeArgs),
-    /// Encode or decode a `core.v1.Message` telemetry payload (auto-detects
-    /// direction; encode also accepts the compact line grammar).
+    /// Encode or decode a `Message` telemetry payload [ALIAS: m].
     #[command(alias = "m")]
     Message(message::MessageArgs),
-    /// Generate or inspect sensor identity keys.
+    /// Generate or inspect sensor identity keys [ALIAS: k].
     #[command(subcommand, alias = "k")]
     Key(key::KeyCommand),
-    /// Validate and print gateway configuration.
+    /// Validate and print gateway configuration [ALIAS: c].
     #[command(subcommand, alias = "c")]
     Config(config::ConfigCommand),
-    /// Print version information.
-    #[command(alias = "v")]
-    Version,
 }
 
 /// Parse arguments, initialise logging, dispatch, and return the exit code.
@@ -166,10 +162,6 @@ pub fn run() -> ExitCode {
         Command::Message(args) => message::run(args),
         Command::Key(cmd) => key::run(cmd),
         Command::Config(cmd) => config::run(cmd),
-        Command::Version => {
-            println!("edge {}", env!("CARGO_PKG_VERSION"));
-            Ok(())
-        }
     };
 
     match result {

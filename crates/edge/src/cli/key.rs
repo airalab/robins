@@ -37,7 +37,7 @@ pub(crate) enum KeyCommand {
     /// Generate a new random Ed25519 sensor identity.
     Generate {
         /// Report rendering.
-        #[arg(long, value_enum, default_value_t = ReportFormat::Text)]
+        #[arg(short, long, value_enum, default_value_t = ReportFormat::Text)]
         output: ReportFormat,
     },
     /// Inspect a Key URI, reporting its public identity (subkey-style).
@@ -46,7 +46,7 @@ pub(crate) enum KeyCommand {
         /// mandatory `0x`-prefixed 32-byte hex secret seed.
         uri: String,
         /// Report rendering.
-        #[arg(long, value_enum, default_value_t = ReportFormat::Text)]
+        #[arg(short, long, value_enum, default_value_t = ReportFormat::Text)]
         output: ReportFormat,
     },
 }

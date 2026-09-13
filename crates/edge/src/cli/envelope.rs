@@ -68,11 +68,11 @@ pub(crate) struct EnvelopeArgs {
     /// Force the input representation (otherwise sniffed from content: a
     /// JSON document encodes, anything else decodes). With `--sign`, only
     /// `binary`/`base64`/`hex` are meaningful (default `binary`).
-    #[arg(long, value_enum)]
+    #[arg(short, long, value_enum)]
     input: Option<ReprFormat>,
     /// Force the output representation (otherwise: `json` when decoding,
     /// `binary` when encoding or signing).
-    #[arg(long, value_enum)]
+    #[arg(short, long, value_enum)]
     output: Option<ReprFormat>,
     /// Sign a raw message with this Ed25519 identity (a Substrate SURI: a
     /// `0x`-prefixed hex seed or a BIP-39 phrase, with optional derivation
@@ -111,22 +111,17 @@ struct EnvelopeJson {
     message: String,
     /// Ed25519 signature (64 bytes, `0x`-prefixed hex).
     signature: String,
-    /// Deduplication id (SHA-256 of the wire bytes), `0x`-prefixed hex.
-    /// Output-only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    message_id: Option<String>,
 }
 
 impl EnvelopeJson {
     /// Build from a decoded envelope plus its dedup id.
-    fn from_envelope(env: &SignedEnvelope, message_id: &str) -> Self {
+    fn from_envelope(env: &SignedEnvelope) -> Self {
         Self {
             sensor_id: format!("0x{}", hex::encode(&env.sensor_id)),
             timestamp: env.timestamp,
             nonce: format!("0x{}", hex::encode(&env.nonce)),
             message: format!("0x{}", hex::encode(&env.message)),
             signature: format!("0x{}", hex::encode(&env.signature)),
-            message_id: Some(message_id.to_string()),
         }
     }
 
@@ -286,8 +281,7 @@ fn write_repr(env: &SignedEnvelope, wire: &[u8], format: ReprFormat) -> CliResul
             Ok(())
         }
         ReprFormat::Json => {
-            let message_id = protocol::envelope_id(wire).to_hex();
-            let json = serde_json::to_string_pretty(&EnvelopeJson::from_envelope(env, &message_id))
+            let json = serde_json::to_string_pretty(&EnvelopeJson::from_envelope(env))
                 .map_err(|e| CliError::runtime(format!("failed to serialize JSON: {e}")))?;
             println!("{json}");
             Ok(())
@@ -315,7 +309,7 @@ mod tests {
                 nonce: Some(vec![9u8; 16]),
             },
         );
-        let dto = EnvelopeJson::from_envelope(&env, "0xdeadbeef");
+        let dto = EnvelopeJson::from_envelope(&env);
         let back = dto.into_envelope().unwrap();
         assert_eq!(env, back);
     }

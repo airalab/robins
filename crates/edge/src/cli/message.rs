@@ -82,11 +82,11 @@ pub(crate) struct MessageArgs {
     data: Option<String>,
     /// Force the input representation (otherwise sniffed: JSON encodes,
     /// line-grammar text encodes, anything else decodes).
-    #[arg(long, value_enum)]
+    #[arg(short, long, value_enum)]
     input: Option<MessageFormat>,
     /// Force the output representation (otherwise: `json` when decoding,
     /// `binary` when encoding).
-    #[arg(long, value_enum)]
+    #[arg(short, long, value_enum)]
     output: Option<MessageFormat>,
     /// Sender identity, required when the line grammar contains `private:`
     /// entries (they are encrypted for their recipient): a Substrate SURI (a
@@ -94,6 +94,11 @@ pub(crate) struct MessageArgs {
     /// junctions).
     #[arg(long, value_name = "SURI")]
     suri: Option<String>,
+    /// Sensor owner public key (SS58 or `0x`-prefixed hex) to set on the
+    /// encoded message's `metadata.owner` field. Overrides any `owner`
+    /// present in JSON input. Unset (no owner) by default.
+    #[arg(long, value_name = "KEY")]
+    owner: Option<String>,
 }
 
 /// Input/output representation for `edge message`.
@@ -124,13 +129,15 @@ pub(crate) fn run(args: MessageArgs) -> CliResult {
         MessageFormat::Json => {
             let dto: MessageJson = serde_json::from_slice(&raw)
                 .map_err(|e| CliError::with_code(3, format!("invalid JSON: {e}")))?;
-            let msg = dto.into_proto()?;
+            let mut msg = dto.into_proto()?;
+            apply_owner(&mut msg, args.owner.as_deref())?;
             protocol::encode_sensor_message(&msg)
         }
         MessageFormat::Grammar => {
             let text = std::str::from_utf8(&raw)
                 .map_err(|_| CliError::usage("grammar input must be valid UTF-8 text"))?;
-            let msg = grammar::parse(text, args.suri.as_deref())?;
+            let mut msg = grammar::parse(text, args.suri.as_deref())?;
+            apply_owner(&mut msg, args.owner.as_deref())?;
             protocol::encode_sensor_message(&msg)
         }
         MessageFormat::Binary => raw.clone(),
@@ -194,6 +201,18 @@ fn write_output(wire: &[u8], format: MessageFormat) -> CliResult {
             "`--output grammar` is not supported: the line grammar is encode-only",
         )),
     }
+}
+
+/// Set `msg.metadata.owner` from `--owner`, if given (SS58 or `0x`-prefixed
+/// hex). Leaves `metadata` untouched (`None` by default) when `owner` is
+/// `None`.
+fn apply_owner(msg: &mut Message, owner: Option<&str>) -> Result<(), CliError> {
+    if let Some(owner) = owner {
+        msg.metadata = Some(Meta {
+            owner: resolve_recipient(owner)?.to_vec(),
+        });
+    }
+    Ok(())
 }
 
 /// Resolve an SS58 or `0x`-prefixed hex-encoded recipient string to its raw

@@ -53,7 +53,7 @@ const KEY_HEX: &str = "0x0707070707070707070707070707070707070707070707070707070
 
 #[test]
 fn version_prints_and_succeeds() {
-    let (code, stdout, _) = run_edge(&["version"], b"");
+    let (code, stdout, _) = run_edge(&["-V"], b"");
     assert_eq!(code, 0);
     assert!(stdout.starts_with("edge "), "got: {stdout}");
 }
