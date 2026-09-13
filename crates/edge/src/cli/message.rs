@@ -49,11 +49,14 @@ use super::format::{self, ByteFormat, Direction};
 use super::{CliError, CliResult};
 use crate::protocol::sensor_message::{Message, Meta, Payload};
 use crate::protocol::{
-    self, Bme280, Bme680, Co2, Encrypted, Gps, Humidity, Ics43434, Insight, InsightSensor,
-    NoiseLevel, Pm10, Pm25, Pressure, Scd41, Sds011, SensorId, Temperature, Urban, UrbanSensor,
+    self, Bme280, Bme680, Co2, Encrypted, EncryptedInsight, EncryptedUrban, Gps, Humidity,
+    Ics43434, Insight, InsightSensor, NoiseLevel, Pm10, Pm25, Pressure, Scd41, Sds011, SensorId,
+    Temperature, Urban, UrbanSensor,
 };
 use clap::{Args, ValueEnum};
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// `edge message` arguments.
 #[derive(Debug, Args)]
@@ -88,17 +91,31 @@ pub(crate) struct MessageArgs {
     /// `binary` when encoding).
     #[arg(short, long, value_enum)]
     output: Option<MessageFormat>,
-    /// Sender identity, required when the line grammar contains `private:`
-    /// entries (they are encrypted for their recipient): a Substrate SURI (a
-    /// `0x`-prefixed hex seed or a BIP-39 phrase, with optional derivation
-    /// junctions).
-    #[arg(long, value_name = "SURI")]
+    /// Identity used for encryption: sender when the line grammar contains
+    /// `private:` entries (they are encrypted for their recipient), or
+    /// recipient with `--decrypt`. A Substrate SURI (a `0x`-prefixed hex
+    /// seed or a BIP-39 phrase, with optional derivation junctions).
+    #[arg(short, long, value_name = "SURI")]
     suri: Option<String>,
     /// Sensor owner public key (SS58 or `0x`-prefixed hex) to set on the
     /// encoded message's `metadata.owner` field. Overrides any `owner`
     /// present in JSON input. Unset (no owner) by default.
-    #[arg(long, value_name = "KEY")]
+    #[arg(long, value_name = "ADDRESS")]
     owner: Option<String>,
+    /// Print the message's dedup id (SHA-256 of the encoded wire bytes) to
+    /// stderr as `message_id: <hex>`. Diagnostics only; stdout stays a clean
+    /// data stream.
+    #[arg(long)]
+    id: bool,
+    /// Decrypt `private` measurement sections when decoding to JSON, using
+    /// `--suri` as the recipient's private key (the sender's public key
+    /// travels with each entry, so it isn't needed separately). Each entry
+    /// is decrypted independently and added as `decrypted` alongside its
+    /// `ciphertext`; entries this key can't open (e.g. addressed to someone
+    /// else) are left ciphertext-only, with a warning on stderr. No effect
+    /// on non-JSON output or when encoding.
+    #[arg(short, long, requires = "suri")]
+    decrypt: bool,
 }
 
 /// Input/output representation for `edge message`.
@@ -150,7 +167,18 @@ pub(crate) fn run(args: MessageArgs) -> CliResult {
         MessageFormat::Binary | MessageFormat::Base64 | MessageFormat::Hex => MessageFormat::Json,
     });
 
-    write_output(&wire, output)
+    if args.id {
+        // Diagnostics only; stdout stays a clean data stream.
+        let message_id = protocol::envelope_id(&wire).to_hex();
+        eprintln!("message_id: {message_id}");
+    }
+
+    let decrypt_suri = if args.decrypt {
+        args.suri.as_deref()
+    } else {
+        None
+    };
+    write_output(&wire, output, decrypt_suri)
 }
 
 /// Sniff the [`MessageFormat`] of `raw`: JSON if it parses as one, else the
@@ -177,7 +205,9 @@ fn sniff_input(raw: &[u8]) -> MessageFormat {
 }
 
 /// Write wire bytes decoded/converted to the requested [`MessageFormat`].
-fn write_output(wire: &[u8], format: MessageFormat) -> CliResult {
+/// `decrypt_suri`, if set, is used to attempt decryption of `private`
+/// measurement sections when writing JSON (see [`MessageJson::from_proto`]).
+fn write_output(wire: &[u8], format: MessageFormat, decrypt_suri: Option<&str>) -> CliResult {
     use base64::Engine;
     match format {
         MessageFormat::Binary => format::write_stdout(wire),
@@ -191,7 +221,7 @@ fn write_output(wire: &[u8], format: MessageFormat) -> CliResult {
         }
         MessageFormat::Json => {
             let msg = protocol::decode_sensor_message(wire).map_err(format::protocol_err)?;
-            let dto = MessageJson::from_proto(&msg)?;
+            let dto = MessageJson::from_proto(&msg, decrypt_suri)?;
             let json = serde_json::to_string_pretty(&dto)
                 .map_err(|e| CliError::runtime(format!("failed to serialize JSON: {e}")))?;
             println!("{json}");
@@ -257,23 +287,32 @@ struct BoardJson<S> {
     /// Public measurements, visible to everyone.
     #[serde(default)]
     public: Vec<S>,
-    /// Encrypted measurement sections, one per recipient.
+    /// Encrypted measurement sections, one per recipient. Each entry carries
+    /// its `decrypted` sensors (populated only with `--decrypt`, and only
+    /// for entries that decrypt successfully with the given `--suri`).
     #[serde(default)]
-    private: Vec<EncryptedJson>,
+    private: Vec<EncryptedJson<S>>,
 }
 
 /// JSON form of `crypto.v1.Encrypted`. This codec never decrypts
-/// `ciphertext`; it is opaque hex, same as the envelope `message` field.
+/// `ciphertext` on its own; `decrypted` is populated separately (see
+/// [`BoardJson`]) when `--decrypt` succeeds for this entry.
 #[derive(Debug, Serialize, Deserialize)]
-struct EncryptedJson {
+#[serde(bound(deserialize = "S: Deserialize<'de>"))]
+struct EncryptedJson<S> {
     version: u32,
     algorithm: String,
     from: String,
     nonce: String,
     ciphertext: String,
+    /// Decrypted sensors for this entry, if `--decrypt` was given, a
+    /// matching `--suri` was supplied, and decryption succeeded. Omitted
+    /// (and ignored on input) otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decrypted: Option<Vec<S>>,
 }
 
-impl EncryptedJson {
+impl<S> EncryptedJson<S> {
     fn from_proto(e: &Encrypted) -> Self {
         Self {
             version: e.version,
@@ -281,6 +320,7 @@ impl EncryptedJson {
             from: format!("0x{}", hex::encode(&e.from)),
             nonce: format!("0x{}", hex::encode(&e.nonce)),
             ciphertext: format!("0x{}", hex::encode(&e.ciphertext)),
+            decrypted: None,
         }
     }
 
@@ -295,9 +335,122 @@ impl EncryptedJson {
     }
 }
 
+/// Build an urban `private` entry's JSON, attempting decryption with
+/// `decrypt_suri` (the recipient's private key) if given. The sender's
+/// public key travels with the entry itself (`from`), so only the
+/// recipient's identity is needed here. Decryption failures (e.g. this
+/// `--suri` isn't the intended recipient) are reported on stderr and leave
+/// the entry as ciphertext rather than aborting the whole command.
+fn encrypted_urban_json(
+    entry: &Encrypted,
+    decrypt_suri: Option<&str>,
+) -> EncryptedJson<UrbanSensorJson> {
+    let mut dto = EncryptedJson::from_proto(entry);
+    if let Some(suri) = decrypt_suri {
+        match decrypt_entry::<EncryptedUrban>(entry, suri) {
+            Ok(decoded) => {
+                dto.decrypted = Some(
+                    decoded
+                        .sensors
+                        .iter()
+                        .map(UrbanSensorJson::from_proto)
+                        .collect::<Result<_, _>>()
+                        .unwrap_or_else(|e| {
+                            eprintln!(
+                                "warning: decrypted urban entry has invalid sensor data: {e:?}"
+                            );
+                            Vec::new()
+                        }),
+                );
+            }
+            Err(e) => eprintln!(
+                "warning: failed to decrypt private entry from 0x{}: {e:?}",
+                hex::encode(&entry.from)
+            ),
+        }
+    }
+    dto
+}
+
+/// Insight counterpart of [`encrypted_urban_json`].
+fn encrypted_insight_json(
+    entry: &Encrypted,
+    decrypt_suri: Option<&str>,
+) -> EncryptedJson<InsightSensorJson> {
+    let mut dto = EncryptedJson::from_proto(entry);
+    if let Some(suri) = decrypt_suri {
+        match decrypt_entry::<EncryptedInsight>(entry, suri) {
+            Ok(decoded) => {
+                dto.decrypted = Some(
+                    decoded
+                        .sensors
+                        .iter()
+                        .map(InsightSensorJson::from_proto)
+                        .collect::<Result<_, _>>()
+                        .unwrap_or_else(|e| {
+                            eprintln!(
+                                "warning: decrypted insight entry has invalid sensor data: {e:?}"
+                            );
+                            Vec::new()
+                        }),
+                );
+            }
+            Err(e) => eprintln!(
+                "warning: failed to decrypt private entry from 0x{}: {e:?}",
+                hex::encode(&entry.from)
+            ),
+        }
+    }
+    dto
+}
+
+/// Decrypt one `private` entry's ciphertext with `suri` as the recipient's
+/// private key, then decode the resulting plaintext as `M` — the
+/// board-specific `EncryptedUrban`/`EncryptedInsight` protobuf wrapper
+/// declared alongside the encoder in [`grammar::encrypt_group`].
+fn decrypt_entry<M: prost::Message + Default>(
+    entry: &Encrypted,
+    suri: &str,
+) -> Result<M, CliError> {
+    let plaintext = decrypt_ciphertext(entry, suri)?;
+    M::decode(plaintext.as_slice())
+        .map_err(|e| CliError::with_code(3, format!("invalid decrypted payload: {e}")))
+}
+
+/// Decrypt an `Encrypted` entry's ciphertext with `suri` as the recipient's
+/// private key, returning the raw plaintext bytes. The sender's public key
+/// (`entry.from`) is used as-is; there is no separate sender verification
+/// since it is exactly what identifies the entry as "self-describing".
+fn decrypt_ciphertext(entry: &Encrypted, suri: &str) -> Result<Vec<u8>, CliError> {
+    let algorithm =
+        libcps::crypto::EncryptionAlgorithm::from_str(&entry.algorithm).map_err(|e| {
+            CliError::runtime(format!(
+                "unsupported encryption algorithm `{}`: {e}",
+                entry.algorithm
+            ))
+        })?;
+    let from: [u8; 32] = entry
+        .from
+        .as_slice()
+        .try_into()
+        .map_err(|_| CliError::with_code(3, "private entry `from` must be 32 bytes"))?;
+    let message = libcps::crypto::EncryptedMessage::V1 {
+        algorithm,
+        from,
+        nonce: entry.nonce.clone(),
+        ciphertext: entry.ciphertext.clone(),
+    };
+    let cipher =
+        libcps::crypto::Cipher::new(suri.to_string(), libcps::crypto::CryptoScheme::Ed25519)
+            .map_err(|e| CliError::runtime(format!("failed to initialise cipher: {e}")))?;
+    cipher
+        .decrypt(&message, None)
+        .map_err(|e| CliError::runtime(format!("decryption failed: {e}")))
+}
+
 /// One `sensor.v1` measurement wrapped by its unit field name, e.g.
 /// `{"temperature": 21.5}`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum MeasurementJson {
     Temperature(f64),
@@ -311,7 +464,7 @@ enum MeasurementJson {
 }
 
 /// `sensor.v1.GPS` JSON mirror.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct GpsJson {
     lat: f64,
     lon: f64,
@@ -338,7 +491,7 @@ impl GpsJson {
 }
 
 /// `device.v1.UrbanSensor` JSON mirror: one outdoor board reading per event.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum UrbanSensorJson {
     Gps(GpsJson),
@@ -348,7 +501,7 @@ enum UrbanSensorJson {
 }
 
 /// `device.v1.InsightSensor` JSON mirror: one indoor board reading per event.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum InsightSensorJson {
     Gps(GpsJson),
@@ -366,8 +519,12 @@ fn decode_hex(field: &str, value: &str) -> Result<Vec<u8>, CliError> {
 }
 
 impl MessageJson {
-    /// Build the JSON DTO from a decoded `core.v1.Message`.
-    fn from_proto(msg: &Message) -> Result<Self, CliError> {
+    /// Build the JSON DTO from a decoded `core.v1.Message`. If `decrypt_suri`
+    /// is set, attempts to decrypt each `private` entry using it as the
+    /// recipient's private key (the sender's public key travels with the
+    /// entry itself); entries that fail to decrypt with this key are left
+    /// as ciphertext, with a warning on stderr.
+    fn from_proto(msg: &Message, decrypt_suri: Option<&str>) -> Result<Self, CliError> {
         let owner = msg
             .metadata
             .as_ref()
@@ -387,7 +544,7 @@ impl MessageJson {
                 private: urban
                     .private
                     .iter()
-                    .map(EncryptedJson::from_proto)
+                    .map(|e| encrypted_urban_json(e, decrypt_suri))
                     .collect(),
             }),
             Payload::Insight(insight) => DeviceJson::Insight(BoardJson {
@@ -399,7 +556,7 @@ impl MessageJson {
                 private: insight
                     .private
                     .iter()
-                    .map(EncryptedJson::from_proto)
+                    .map(|e| encrypted_insight_json(e, decrypt_suri))
                     .collect(),
             }),
         };
@@ -649,7 +806,6 @@ fn ics43434_from_measurement(m: MeasurementJson) -> Result<Ics43434, CliError> {
 
 mod grammar {
     use super::*;
-    use prost::Message as _;
 
     /// Device board — selects `Message.payload`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1198,7 +1354,7 @@ mod tests {
     #[test]
     fn urban_message_json_roundtrip() {
         let msg = sample_urban();
-        let json = MessageJson::from_proto(&msg).unwrap();
+        let json = MessageJson::from_proto(&msg, None).unwrap();
         let text = serde_json::to_string_pretty(&json).unwrap();
         let parsed: MessageJson = serde_json::from_str(&text).unwrap();
         let back = parsed.into_proto().unwrap();
@@ -1219,7 +1375,7 @@ mod tests {
             metadata: None,
             payload: None,
         };
-        let err = MessageJson::from_proto(&msg).unwrap_err();
+        let err = MessageJson::from_proto(&msg, None).unwrap_err();
         assert!(err.message.contains("payload"));
     }
 
@@ -1255,5 +1411,58 @@ mod tests {
             "private:5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM/urban/bme280.temp=21.5\n";
         let err = grammar::parse(text, None).unwrap_err();
         assert_eq!(err.code, 2);
+    }
+
+    /// End-to-end: encrypt a private measurement for a recipient (via the
+    /// line grammar), round-trip it through the wire encoding, then decrypt
+    /// it back with `MessageJson::from_proto`'s `decrypt_suri` — mirroring
+    /// what `edge message --decrypt --suri <SURI>` does.
+    #[test]
+    fn private_section_roundtrips_through_decrypt() {
+        let sender = protocol::SensorIdentity::from_secret_bytes(&[7u8; 32]);
+        let recipient = protocol::SensorIdentity::from_secret_bytes(&[9u8; 32]);
+        let recipient_suri = recipient.secret_to_hex();
+        let recipient_ss58 = recipient.sensor_id().to_ss58();
+
+        let text = format!("private:{recipient_ss58}/bme280.temp=21.5\n");
+        let msg = grammar::parse(&text, Some(&sender.secret_to_hex())).unwrap();
+
+        // The private section is genuinely encrypted: no plaintext leaks
+        // into the wire bytes.
+        let wire = protocol::encode_sensor_message(&msg);
+        let decoded = protocol::decode_sensor_message(&wire).unwrap();
+        match &decoded.payload {
+            Some(Payload::Urban(urban)) => {
+                assert!(urban.public.is_empty());
+                assert_eq!(urban.private.len(), 1);
+            }
+            _ => panic!("expected urban payload"),
+        }
+
+        // Decrypting with the intended recipient's SURI recovers the
+        // measurement, decoded through the `EncryptedUrban` protobuf
+        // declaration (the same one used to encrypt it).
+        let json = MessageJson::from_proto(&decoded, Some(&recipient_suri)).unwrap();
+        let DeviceJson::Urban(board) = &json.device else {
+            panic!("expected urban device")
+        };
+        assert_eq!(board.private.len(), 1);
+        let decrypted = board.private[0]
+            .decrypted
+            .as_ref()
+            .expect("entry should decrypt with the recipient's suri");
+        assert_eq!(
+            decrypted,
+            &vec![UrbanSensorJson::Bme280(MeasurementJson::Temperature(21.5))]
+        );
+
+        // Decrypting with an unrelated SURI must not recover the
+        // measurement, and must not error the whole command either.
+        let stranger = protocol::SensorIdentity::from_secret_bytes(&[42u8; 32]);
+        let json = MessageJson::from_proto(&decoded, Some(&stranger.secret_to_hex())).unwrap();
+        let DeviceJson::Urban(board) = &json.device else {
+            panic!("expected urban device")
+        };
+        assert!(board.private[0].decrypted.is_none());
     }
 }

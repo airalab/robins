@@ -1,62 +1,146 @@
 # Robonomics Edge Gateway
 
-The `edge` is a compact, single-binary Connectivity Protocol ingress daemon for
-SBC/edge devices. It accepts signed protocol envelopes over an HTTP transport,
-validates them through a single canonical pipeline (signature → authorization →
-deduplication), and republishes accepted messages to a native libp2p GossipSub
-topic.
+The `edge` is a **compact, single-binary** Connectivity Protocol ingress daemon for
+SBC/edge devices, plus a full CLI toolbox for keys, envelopes and telemetry.
+It accepts signed protocol envelopes over HTTP, validates them through one
+canonical pipeline, and republishes accepted messages to a native libp2p
+GossipSub topic — no database, no broker, no heavyweight runtime.
 
 ```text
-  HTTP ingress ─▶ bounded channel ─▶ pipeline (verify → auth → dedup) ─▶ gossip
-  ops server (/health, /ready, /metrics, /debug/peers)                  publisher
+  sensor ──▶ sign ──▶ HTTP POST ──▶ verify → auth → dedup ──▶ GossipSub ──▶ swarm
+                                     ops server: /health /ready /metrics
 ```
 
-Durable storage, IPFS publishing, Robonomics anchoring and Meshtastic ingress
-are deferred subsystems: their configuration is accepted but inactive in the
-MVP build.
+## Why you'll like it
 
-## Building
+- 🪶 **One binary.** `edge` is both the daemon and the toolbox (`key`,
+  `envelope`, `message`, `config`) — no separate client tools to install.
+- 🔒 **Signed by default.** Every envelope is Ed25519-signed; the gateway
+  verifies before it ever touches the pipeline.
+- 🔌 **Unix-friendly.** Every command reads `stdin`/writes `stdout`, so it
+  composes with `curl`, `jq`, and shell pipelines.
+- 📡 **Batteries-included ops.** `/health`, `/ready`, `/metrics` (Prometheus)
+  and `/debug/peers` ship out of the box — nothing to bolt on.
 
-The workspace uses a Nix dev shell:
+## Quick start
+
+Install the binary from the workspace (Nix dev shell recommended):
 
 ```sh
-nix develop --command cargo build -p edge
+nix develop --command cargo build -p edge --release
+alias edge=./target/release/edge
 ```
 
-## Running the gateway
+### 1. Generate a sensor identity
 
-```sh
-# Validate configuration first (optional).
-edge config check --config /etc/edge/gateway.toml
-
-# Start the long-running daemon. Runs until SIGINT (Ctrl-C).
-edge gw --config /etc/edge/gateway.toml
+```console
+$ edge key generate
+Secret seed:  0x40237f32074c4bd62cc257e30a5a43e65efe566be2e66ac85f807f7098009284
+Public key:   0xedefe5b07e2c03b97f72748ef532d39fa2c724175216ac5a3c6d40cb7766b631
+SS58 Address: 4Ha5tJacMSV2xSK5VvQ2naWP63EAFq1bD7HgNEdWJ9LYhj3U
 ```
 
-`--config` defaults to `/etc/edge/gateway.toml`. On startup the gateway binds
-its listeners, subscribes to the GossipSub topic, and begins accepting
-envelopes at `POST /v1/telemetry`. A `Ctrl-C` triggers a graceful shutdown that
-drains and stops every subsystem.
+### 2. Compose telemetry with the line grammar and sign it
+
+`edge message` turns a compact, human-typable grammar into a protobuf
+payload — no schemas to hand-write:
+
+```console
+$ printf 'bme280.temp=21.5\nbme280.humidity=44\nurban/gps=51.5,-0.12,35\n' \
+    | edge message --output json
+{
+  "owner": "",
+  "urban": {
+    "public": [
+      { "bme280": { "temperature": 21.5 } },
+      { "bme280": { "humidity": 44.0 } },
+      { "gps": { "lat": 51.5, "lon": -0.12, "height_m": 35.0 } }
+    ],
+    "private": []
+  }
+}
+```
+
+Sign it into a wire-ready `SignedEnvelope` with the identity from step 1:
+
+```console
+$ printf 'bme280.temp=21.5\nbme280.humidity=44\n' | edge message > msg.bin
+$ edge envelope --sign 0x4023...seed... --input binary < msg.bin > env.bin
+```
+
+### 3. Start the gateway
+
+```console
+$ edge config generate --output gateway.toml
+wrote default configuration to gateway.toml
+
+$ edge config check --config gateway.toml
+configuration is valid
+
+$ edge gateway --config gateway.toml
+```
+
+The daemon binds the HTTP ingress, subscribes to GossipSub, and starts the
+ops server. `Ctrl-C` triggers a graceful shutdown.
+
+### 4. Feed it and watch it work
+
+```console
+$ curl -s -o /dev/null -w 'HTTP %{http_code}\n' \
+    -X POST http://127.0.0.1:3000/v1/telemetry --data-binary @env.bin
+HTTP 202
+
+$ curl -s http://127.0.0.1:9090/metrics
+# HELP edge_ingress_received_total Total envelopes received across all ingress transports
+# TYPE edge_ingress_received_total counter
+edge_ingress_received_total{transport="http"} 1
+
+# HELP edge_connected_peers Currently connected libp2p peers
+# TYPE edge_connected_peers gauge
+edge_connected_peers 0
+```
+
+One accepted envelope, end to end: signed on a sensor, verified and
+deduplicated by the gateway, and counted in Prometheus metrics — all with the
+one binary.
+
+## The toolbox at a glance
+
+| Command                 | Alias | Purpose                                                |
+| ------------------------ | ----- | ------------------------------------------------------- |
+| `edge gateway`           | `g`   | Run the long-running ingress daemon.                   |
+| `edge key generate`      | `k`   | Mint a fresh Ed25519 sensor identity (subkey-style).    |
+| `edge key inspect <uri>` | `k`   | Report the public identity for a seed or SS58 address.  |
+| `edge message`           | `m`   | Encode (grammar/JSON) or decode a telemetry payload.    |
+| `edge envelope`          | `e`   | Sign, verify, encode or decode a `SignedEnvelope`.      |
+| `edge config generate`   | `c`   | Emit a validated default `gateway.toml`.                |
+| `edge config check`      | `c`   | Validate a configuration file.                          |
+
+Every encode/decode command auto-detects its direction and byte format
+(JSON/hex/base64/binary), so `edge envelope 0xaabb...` and
+`cat file.bin | edge envelope --output json` both just work.
+
+## Operations endpoints
+
+The ops server (bound to `[metrics].listen`) exposes:
+
+| Path           | Purpose                                            |
+| -------------- | --------------------------------------------------- |
+| `/health`      | liveness probe (`ok` once the process is up)        |
+| `/ready`       | readiness probe (gated on `min_connected_peers`)     |
+| `/metrics`     | Prometheus exposition (ingress, pipeline, peers)     |
+| `/debug/peers` | currently connected libp2p peers (diagnostics)       |
 
 ### Exit codes
 
-| Code | Meaning                                            |
+Every command shares one exit-code contract, so scripts can branch reliably:
+
+| Code | Meaning                                          |
 | ---- | -------------------------------------------------- |
 | `0`  | success                                            |
 | `1`  | runtime error (bind failure, subsystem startup)    |
 | `2`  | CLI usage / configuration error                    |
 | `3`  | protocol / input error (malformed envelope)        |
-
-## Operations endpoints
-
-The operations server (bound to `[metrics].listen`) exposes:
-
-| Path           | Purpose                                             |
-| -------------- | --------------------------------------------------- |
-| `/health`      | liveness probe (`ok` once the process is up)        |
-| `/ready`       | readiness probe (gated on `min_connected_peers`)    |
-| `/metrics`     | Prometheus exposition (ingress, pipeline, peers)    |
-| `/debug/peers` | currently connected libp2p peers (diagnostics)      |
 
 ## Configuration
 
@@ -70,23 +154,23 @@ A fully commented example lives at [`examples/gateway.toml`](examples/gateway.to
 
 ### Active sections
 
-| Section      | Key                   | Default                    | Description                                            |
-| ------------ | --------------------- | -------------------------- | ------------------------------------------------------ |
-| `[http]`     | `enabled`             | `true`                     | Enable the HTTP ingress transport.                     |
-|              | `listen`              | `0.0.0.0:3000`             | Ingress bind address (`POST /v1/telemetry`).           |
-|              | `max_body_bytes`      | `65536`                    | Reject request bodies larger than this.                |
-| `[auth]`     | `mode`                | `none`                     | `none` accepts all valid envelopes; `whitelist` gates. |
-|              | `file`                | —                          | Whitelist file (required for `whitelist`).             |
-| `[pubsub]`   | `enabled`             | `true`                     | Enable the GossipSub publisher.                        |
-|              | `listen`              | `["/ip4/0.0.0.0/tcp/64442"]` | libp2p listen multiaddrs (TCP or `/ws`).            |
-|              | `topic`               | `sensors.social/v1`        | Topic accepted envelopes are published to.             |
-|              | `reserved_peers`      | `[]`                       | Peers to dial and keep connected (TCP/`/ws`/`/wss`).   |
-|              | `min_connected_peers` | `0`                        | Peers required before `/ready` reports ready.          |
-|              | `identity_file`       | —                          | Persist the node identity for a stable peer id.        |
-| `[metrics]`  | `listen`              | `127.0.0.1:9090`           | Operations server bind address.                        |
-| `[pipeline]` | `ingress_buffer`      | `1024`                     | Ingress → pipeline channel capacity.                   |
-|              | `dedup_capacity`      | `8192`                     | Max retained dedup entries.                            |
-|              | `dedup_ttl_secs`      | `300`                      | Dedup entry time-to-live (seconds).                    |
+| Section      | Key                   | Default                     | Description                                            |
+| ------------ | --------------------- | ---------------------------- | ------------------------------------------------------ |
+| `[http]`     | `enabled`             | `true`                       | Enable the HTTP ingress transport.                     |
+|              | `listen`              | `0.0.0.0:3000`               | Ingress bind address (`POST /v1/telemetry`).           |
+|              | `max_body_bytes`      | `65536`                      | Reject request bodies larger than this.                |
+| `[auth]`     | `mode`                | `none`                       | `none` accepts all valid envelopes; `whitelist` gates. |
+|              | `file`                | —                            | Whitelist file (required for `whitelist`).             |
+| `[pubsub]`   | `enabled`             | `true`                       | Enable the GossipSub publisher.                        |
+|              | `listen`              | `["/ip4/0.0.0.0/tcp/64442"]` | libp2p listen multiaddrs (TCP or `/ws`).               |
+|              | `topic`               | `sensors.social/v1`          | Topic accepted envelopes are published to.             |
+|              | `reserved_peers`      | `[]`                         | Peers to dial and keep connected (TCP/`/ws`/`/wss`).   |
+|              | `min_connected_peers` | `0`                          | Peers required before `/ready` reports ready.          |
+|              | `identity_file`       | —                            | Persist the node identity for a stable peer id.        |
+| `[metrics]`  | `listen`              | `127.0.0.1:9090`             | Operations server bind address.                        |
+| `[pipeline]` | `ingress_buffer`      | `1024`                       | Ingress → pipeline channel capacity.                   |
+|              | `dedup_capacity`      | `8192`                       | Max retained dedup entries.                            |
+|              | `dedup_ttl_secs`      | `300`                        | Dedup entry time-to-live (seconds).                    |
 
 ### Deferred sections
 
