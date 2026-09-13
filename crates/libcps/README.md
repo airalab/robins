@@ -54,7 +54,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-libcps = "0.1.0"
+libcps = "0.6.0"
 ```
 
 #### Feature Flags
@@ -66,11 +66,11 @@ The library supports optional feature flags for flexible dependency management:
 ```toml
 # Default: CLI feature enabled
 [dependencies]
-libcps = "0.1.0"
+libcps = "0.6.0"
 
 # Library only, without CLI dependencies
 [dependencies]
-libcps = { version = "0.1.0", default-features = false }
+libcps = { version = "0.6.0", default-features = false }
 ```
 
 ### CLI Tool from Crates.io
@@ -89,7 +89,7 @@ nix run github:airalab/robonomics#libcps
 
 ```bash
 # Clone the repository
-git clone https://github.com/airalab/robonomics
+git clone https://github.com/airalab/robins
 cd robonomics
 
 # Build the library

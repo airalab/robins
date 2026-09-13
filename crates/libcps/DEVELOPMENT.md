@@ -6,7 +6,6 @@ This document provides information for developers working on the libcps library 
 
 - Rust 1.88.0 or later
 - A running Robonomics node with CPS pallet for testing
-- (Optional) MQTT broker for testing bridge functionality
 
 ## Building
 
@@ -34,21 +33,13 @@ cargo build --package libcps
 
 # Build library without MQTT support
 cargo build --package libcps --lib --no-default-features
-
-# Build library with only MQTT (no CLI)
-cargo build --package libcps --lib --no-default-features --features mqtt
-
-# Build CLI (includes MQTT by default)
-cargo build --package libcps --bin cps
 ```
 
 Available features:
-- **`mqtt`** - Enables MQTT bridge functionality (default: enabled)
 - **`cli`** - Enables CLI binary with colored output and chrono (default: enabled)
 
 Feature dependencies:
 - `default = ["mqtt", "cli"]`
-- `mqtt = ["dep:rumqttc", "dep:toml"]`
 - `cli = ["mqtt", "clap", "colored", "chrono", "indicatif", "env_logger", "easy-hex"]`
 
 ## Code Structure
@@ -61,7 +52,6 @@ Feature dependencies:
 4. **`src/commands/`**: Individual CLI command implementations (thin wrappers)
 5. **`src/crypto/`**: Encryption/decryption utilities (library)
 6. **`src/display/`**: Beautiful colored output formatting (CLI-only)
-7. **`src/mqtt/`**: MQTT bridge configuration and implementation (library)
 8. **`src/node.rs`**: Node-oriented API with type definitions for CPS operations (library)
 
 ### Adding a New Command
@@ -169,10 +159,6 @@ rust-gdb target/debug/cps
 - `indicatif`: Progress bars
 - `serde`/`serde_json`: Serialization
 
-### Optional Dependencies
-
-- `rumqttc`: MQTT client (feature: `mqtt`)
-
 ## Architecture Decisions
 
 ### Why Extract Metadata at Build Time?
@@ -185,8 +171,6 @@ the runtime build and provides it as a dependency. This:
 - Makes builds faster - metadata is pre-extracted
 - Keeps the final binary smaller
 - Still ensures metadata is always in sync with runtime version
-
-For details, see the [subxt-api documentation](../../runtime/robonomics/subxt-api/README.md).
 
 ### Why XChaCha20-Poly1305?
 
@@ -213,7 +197,7 @@ For details, see the [subxt-api documentation](../../runtime/robonomics/subxt-ap
 
 The codebase is organized to separate library functionality from CLI:
 
-- **Library code** (`lib.rs`, `blockchain/`, `crypto/`, `mqtt/`, `node.rs`): Pure functionality, no colored output
+- **Library code** (`lib.rs`, `blockchain/`, `crypto/`, `node.rs`): Pure functionality, no colored output
 - **CLI code** (`main.rs`, `commands/`, `display/`): User interface, pretty printing, argument parsing
 
 This allows:
@@ -295,12 +279,6 @@ docs: update README with new examples
 - Consider caching frequently accessed data
 - Batch queries when possible
 
-### MQTT Bridge
-
-- Adjust polling interval based on use case
-- Consider using subscriptions for real-time updates
-- Handle reconnection gracefully
-
 ### Memory Usage
 
 - Use streaming for large payloads
@@ -332,7 +310,6 @@ docs: update README with new examples
 - [Robonomics Documentation](https://wiki.robonomics.network)
 - [Subxt Documentation](https://docs.rs/subxt)
 - [Substrate Documentation](https://docs.substrate.io)
-- [MQTT Protocol](https://mqtt.org)
 - [XChaCha20 Spec](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-xchacha)
 
 ## License

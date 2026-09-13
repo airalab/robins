@@ -749,8 +749,7 @@ impl Config {
         // Subscribe to finalized blocks
         let mut blocks_sub = client
             .api
-            .blocks()
-            .subscribe_finalized()
+            .stream_blocks()
             .await
             .map_err(|e| anyhow!("Failed to subscribe to finalized blocks: {}", e))?;
 
@@ -763,8 +762,15 @@ impl Config {
                 }
             };
 
+            let block_at = match block.at().await {
+                Ok(b) => b,
+                Err(_e) => {
+                    continue;
+                }
+            };
+
             // Check events in this block for PayloadSet events related to our node
-            let events = match block.events().await {
+            let events = match block_at.events().fetch().await {
                 Ok(e) => e,
                 Err(_e) => {
                     continue;
@@ -915,4 +921,4 @@ pub type MessageHandler = Box<dyn Fn(&str, &[u8]) + Send + Sync>;
 /// a message to MQTT. Can be used for logging or custom tracking.
 ///
 /// Arguments: (topic, block_number, data)
-pub type PublishHandler = Box<dyn Fn(&str, u32, &str) + Send + Sync>;
+pub type PublishHandler = Box<dyn Fn(&str, u64, &str) + Send + Sync>;

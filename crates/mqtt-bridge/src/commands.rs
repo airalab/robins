@@ -148,7 +148,7 @@ pub async fn publish(
 
     // Create a publish handler for CLI output
     let topic_clone = topic.to_string();
-    let publish_handler = Box::new(move |_t: &str, block_num: u32, data: &str| {
+    let publish_handler = Box::new(move |_t: &str, block_num: u64, data: &str| {
         // Truncate data if too long for display
         const MAX_DISPLAY_LENGTH: usize = 100;
         const TRUNCATE_ELLIPSIS: &str = "...";
