@@ -32,14 +32,12 @@
 //! - `1` — runtime error (I/O, unimplemented mode, unexpected failure).
 //! - `2` — CLI usage or configuration error.
 //! - `3` — protocol / input error (malformed or invalid envelope).
-//!
-//! `codec verify` additionally distinguishes a cryptographically **invalid**
-//! envelope (`1`) from **malformed** input (`2`), matching the
-//! `edge codec verify` contract.
 
-mod codec;
 mod config;
+mod envelope;
+mod format;
 mod key;
+mod message;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -85,6 +83,20 @@ pub(crate) type CliResult = Result<(), CliError>;
 /// Robonomics Edge Gateway — Connectivity Protocol ingress for edge devices.
 #[derive(Debug, Parser)]
 #[command(name = "edge", version, about, long_about = None)]
+#[command(before_help = r#"
+╔══════════════════════════════════════════════════════╗
+║                                                      ║
+║          ███████╗██████╗  ██████╗ ███████╗           ║
+║          ██╔════╝██╔══██╗██╔════╝ ██╔════╝           ║
+║          █████╗  ██║  ██║██║  ███╗█████╗             ║
+║          ██╔══╝  ██║  ██║██║   ██║██╔══╝             ║
+║          ███████╗██████╔╝╚██████╔╝███████╗           ║
+║          ╚══════╝╚═════╝  ╚═════╝ ╚══════╝           ║
+║                                                      ║
+║          Edge Gateway - Robonomics Network           ║
+║                                                      ║
+╚══════════════════════════════════════════════════════╝
+"#)]
 struct Cli {
     /// Log verbosity (`error`, `warn`, `info`, `debug`, `trace`).
     #[arg(long, global = true, default_value = "info", env = "EDGE_LOG_LEVEL")]
@@ -106,27 +118,34 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Run the long-running gateway daemon.
-    Gw {
+    #[command(alias = "gw")]
+    Gateway {
         /// Path to the gateway TOML configuration file.
         #[arg(short, long, default_value = crate::config::DEFAULT_CONFIG_PATH)]
         config: std::path::PathBuf,
     },
     /// Produce signed envelopes from local sources (not yet implemented).
-    Node {
+    #[command(alias = "s")]
+    Sensor {
         /// Captured arguments (parsing deferred until `node` is implemented).
         #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
         args: Vec<String>,
     },
-    /// Encode, decode and inspect protocol messages.
-    #[command(subcommand)]
-    Codec(codec::CodecCommand),
-    /// Generate, inspect keys and sign or verify messages.
-    #[command(subcommand)]
+    /// Encode or decode a `crypto.v1.SignedEnvelope` (auto-detects direction).
+    #[command(alias = "e")]
+    Envelope(envelope::EnvelopeArgs),
+    /// Encode or decode a `core.v1.Message` telemetry payload (auto-detects
+    /// direction; encode also accepts the compact line grammar).
+    #[command(alias = "m")]
+    Message(message::MessageArgs),
+    /// Generate or inspect sensor identity keys.
+    #[command(subcommand, alias = "k")]
     Key(key::KeyCommand),
     /// Validate and print gateway configuration.
-    #[command(subcommand)]
+    #[command(subcommand, alias = "c")]
     Config(config::ConfigCommand),
     /// Print version information.
+    #[command(alias = "v")]
     Version,
 }
 
@@ -139,11 +158,12 @@ pub fn run() -> ExitCode {
     init_logging(&cli);
 
     let result = match cli.command {
-        Command::Gw { config } => run_gateway(config),
-        Command::Node { .. } => Err(CliError::runtime(
-            "`edge node` is not yet implemented in this build",
+        Command::Gateway { config } => run_gateway(config),
+        Command::Sensor { .. } => Err(CliError::runtime(
+            "`edge sensor` is not yet implemented in this build",
         )),
-        Command::Codec(cmd) => codec::run(cmd),
+        Command::Envelope(args) => envelope::run(args),
+        Command::Message(args) => message::run(args),
         Command::Key(cmd) => key::run(cmd),
         Command::Config(cmd) => config::run(cmd),
         Command::Version => {

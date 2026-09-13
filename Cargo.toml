@@ -30,6 +30,8 @@ libcps = { path = "./crates/libcps", default-features = false }
 mqtt-bridge = { path = "./crates/mqtt-bridge", default-features = false }
 robonet.path = "./crates/robonet"
 
+robonomics-runtime-subxt-api.path = "../robonomics/runtime/robonomics/subxt-api"
+
 bs58 = "0.5.0"
 clap = { version = "4.2.5", features = ["derive"] }
 color-eyre = { version = "0.6.3", default-features = false }
@@ -43,9 +45,8 @@ tokio = { version = "1.40", features = ["full"] }
 env_logger = "0.11"
 log = "0.4"
 zombienet-sdk = "0.4.15"
-# Subxt 0.44 used by Polkadot SDK, update when it switch out
-subxt = "0.44"
-subxt-signer = "0.44"
+subxt = "0.50.3"
+subxt-signer = "0.50.3"
 curve25519-dalek = "5.0"
 x25519-dalek = { version = "3.0", features = ["static_secrets"] }
 chacha20poly1305 = "0.11"
@@ -63,8 +64,8 @@ assert_cmd = "2.0.14"
 easy-hex = "1.0"
 seahash = "4.1"
 rocksdb = { version = "0.24", default-features = false }
-polkadot-omni-node-lib = "0.18.0"
-polkadot-jemalloc-shim = "0.6.0"
+polkadot-omni-node-lib = "0.20.0"
+polkadot-jemalloc-shim = "0.8.0"
 substrate-build-script-utils = "11.0.3"
 parity-scale-codec = "3.6.1"
 sp-core = "43.0.0"

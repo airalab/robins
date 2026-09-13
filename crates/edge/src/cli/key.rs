@@ -15,7 +15,7 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! `edge key` — sensor identity management: generate, inspect, sign and verify.
+//! `edge key` — sensor identity management: generate and inspect.
 //!
 //! A sensor identity is an Ed25519 keypair whose public key *is* the
 //! [`SensorId`](crate::protocol::SensorId) (an `AccountId32` rendered as an
@@ -23,18 +23,13 @@
 //! key and `inspect` reports the public material for an existing one, both in
 //! the familiar "Secret seed / Public key / SS58 Address" layout.
 //!
-//! Signing and verification reuse the canonical [`crate::protocol`] routines and
-//! the shared stdin/stdout plumbing from [`super::codec`]; no crypto is
-//! re-implemented here.
+//! Signing and verification of envelopes live under `edge envelope`; this
+//! command is purely about identity material.
 
-use super::codec::{
-    load_identity, protocol_err, read_envelope_bytes, read_stdin, wire_from_input, write_repr,
-    ByteFormat, ReportFormat, ReprFormat,
-};
+use super::format::ReportFormat;
 use super::{CliError, CliResult};
-use crate::protocol::{self, SensorId, SensorIdentity, SignOptions};
+use crate::protocol::{SensorId, SensorIdentity};
 use clap::Subcommand;
-use std::path::PathBuf;
 
 /// `edge key` subcommands.
 #[derive(Debug, Subcommand)]
@@ -48,35 +43,8 @@ pub(crate) enum KeyCommand {
     /// Inspect a Key URI, reporting its public identity (subkey-style).
     Inspect {
         /// A Key URI to be inspected: an SS58 address (public-only) or a
-        /// `0x`-prefixed / bare 32-byte hex secret seed.
+        /// mandatory `0x`-prefixed 32-byte hex secret seed.
         uri: String,
-        /// Report rendering.
-        #[arg(long, value_enum, default_value_t = ReportFormat::Text)]
-        output: ReportFormat,
-    },
-    /// Sign an opaque message, producing a `SignedEnvelope`.
-    Sign {
-        /// Path to a file holding the Ed25519 secret key (32 raw bytes or hex).
-        #[arg(long)]
-        key: PathBuf,
-        /// Measurement timestamp in Unix milliseconds (defaults to now).
-        #[arg(long)]
-        timestamp: Option<u64>,
-        /// Anti-replay nonce as hex (defaults to a fresh random value).
-        #[arg(long)]
-        nonce: Option<String>,
-        /// Format of the message read from stdin.
-        #[arg(long, value_enum, default_value_t = ByteFormat::Binary)]
-        input: ByteFormat,
-        /// Format of the envelope written to stdout.
-        #[arg(long, value_enum, default_value_t = ReprFormat::Binary)]
-        output: ReprFormat,
-    },
-    /// Verify an envelope's signature and structure.
-    Verify {
-        /// Format of the envelope read from stdin.
-        #[arg(long, value_enum, default_value_t = ByteFormat::Binary)]
-        input: ByteFormat,
         /// Report rendering.
         #[arg(long, value_enum, default_value_t = ReportFormat::Text)]
         output: ReportFormat,
@@ -88,14 +56,6 @@ pub(crate) fn run(command: KeyCommand) -> CliResult {
     match command {
         KeyCommand::Generate { output } => generate(output),
         KeyCommand::Inspect { uri, output } => inspect(uri, output),
-        KeyCommand::Sign {
-            key,
-            timestamp,
-            nonce,
-            input,
-            output,
-        } => sign(key, timestamp, nonce, input, output),
-        KeyCommand::Verify { input, output } => verify(input, output),
     }
 }
 
@@ -112,7 +72,8 @@ fn generate(output: ReportFormat) -> CliResult {
 /// Implements `edge key inspect`.
 ///
 /// Following `subkey`, the URI may be a public SS58 address (reported without a
-/// secret) or a 32-byte hex secret seed (reported with its derived public key).
+/// secret) or a `0x`-prefixed 32-byte hex secret seed (reported with its
+/// derived public key).
 fn inspect(uri: String, output: ReportFormat) -> CliResult {
     let uri = uri.trim();
 
@@ -121,11 +82,12 @@ fn inspect(uri: String, output: ReportFormat) -> CliResult {
         return report(None, &sensor_id, output);
     }
 
-    // Otherwise interpret the URI as a hex secret seed (`0x`-prefix optional).
-    let seed = uri.strip_prefix("0x").unwrap_or(uri);
-    let identity = SensorIdentity::from_hex(seed).map_err(|e| {
+    // Otherwise interpret the URI as a Substrate SURI: a mandatory
+    // `0x`-prefixed hex secret seed or a BIP-39 recovery phrase, with
+    // optional derivation junctions and password.
+    let identity = SensorIdentity::from_suri(uri).map_err(|e| {
         CliError::usage(format!(
-            "invalid key URI: expected an SS58 address or 32-byte hex secret seed: {e}"
+            "invalid key URI: expected an SS58 address or a valid SURI: {e}"
         ))
     })?;
     report(
@@ -146,27 +108,17 @@ fn report(secret_hex: Option<String>, sensor_id: &SensorId, output: ReportFormat
     match output {
         ReportFormat::Text => {
             if let Some(secret) = &secret_hex {
-                println!("Secret seed:  0x{secret}");
+                println!("Secret seed:  {secret}");
             }
-            println!("Public key:   0x{public_hex}");
+            println!("Public key:   {public_hex}");
             println!("SS58 Address: {ss58}");
         }
         ReportFormat::Json => {
             let mut map = serde_json::Map::new();
             if let Some(secret) = &secret_hex {
-                map.insert(
-                    "secretSeed".into(),
-                    serde_json::json!(format!("0x{secret}")),
-                );
+                map.insert("secretSeed".into(), serde_json::json!(secret));
             }
-            map.insert(
-                "publicKey".into(),
-                serde_json::json!(format!("0x{public_hex}")),
-            );
-            map.insert(
-                "sensorId".into(),
-                serde_json::json!(format!("0x{public_hex}")),
-            );
+            map.insert("publicKey".into(), serde_json::json!(public_hex));
             map.insert("ss58Address".into(), serde_json::json!(ss58));
             let json = serde_json::to_string_pretty(&serde_json::Value::Object(map))
                 .map_err(|e| CliError::runtime(format!("failed to serialize JSON: {e}")))?;
@@ -176,73 +128,9 @@ fn report(secret_hex: Option<String>, sensor_id: &SensorId, output: ReportFormat
     Ok(())
 }
 
-/// Implements `edge key sign`.
-fn sign(
-    key: PathBuf,
-    timestamp: Option<u64>,
-    nonce: Option<String>,
-    input: ByteFormat,
-    output: ReprFormat,
-) -> CliResult {
-    let identity = load_identity(&key)?;
-    let message = wire_from_input(&read_stdin()?, input)?;
-    let nonce = match nonce {
-        Some(hex_nonce) => Some(
-            hex::decode(hex_nonce.trim())
-                .map_err(|e| CliError::usage(format!("invalid --nonce hex: {e}")))?,
-        ),
-        None => None,
-    };
-    let options = SignOptions {
-        timestamp_ms: timestamp,
-        nonce,
-    };
-    let env = protocol::sign_message(&identity, &message, options);
-    let wire = protocol::encode_envelope(&env);
-    write_repr(&env, &wire, output)
-}
-
-/// Implements `edge key verify`.
-fn verify(input: ByteFormat, output: ReportFormat) -> CliResult {
-    let (env, _wire) = read_envelope_bytes(input)?;
-    match protocol::verify_envelope(&env) {
-        Ok(verified) => {
-            match output {
-                ReportFormat::Text => println!("valid"),
-                ReportFormat::Json => {
-                    let value = serde_json::json!({
-                        "valid": true,
-                        "sensor_id": verified.sensor_id.to_ss58(),
-                    });
-                    println!("{value}");
-                }
-            }
-            Ok(())
-        }
-        Err(err) => {
-            if output == ReportFormat::Json {
-                let value = serde_json::json!({
-                    "valid": false,
-                    "error": err.to_string(),
-                });
-                println!("{value}");
-            }
-            Err(protocol_err(err))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn generated_identity_signs_and_verifies() {
-        let identity = SensorIdentity::generate();
-        let env = protocol::sign_message(&identity, b"payload", SignOptions::default());
-        let verified = protocol::verify_envelope(&env).unwrap();
-        assert_eq!(verified.sensor_id, identity.sensor_id());
-    }
 
     #[test]
     fn inspect_reports_matching_ss58() {

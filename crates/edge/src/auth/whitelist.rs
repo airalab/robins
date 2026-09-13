@@ -18,8 +18,8 @@
 //! The `whitelist` authorization policy.
 //!
 //! An in-memory set of authorized [`SensorId`]s loaded from a text file. Each
-//! non-empty, non-comment line holds one sensor identity in either SS58 or hex
-//! form (an optional `0x` prefix is accepted); `#` begins a comment.
+//! non-empty, non-comment line holds one sensor identity in either SS58 or
+//! `0x`-prefixed hex form; `#` begins a comment.
 
 use super::AuthPolicy;
 use crate::config::AuthMode;
@@ -56,8 +56,8 @@ impl Whitelist {
     /// Load a whitelist from a file, one identity per line.
     ///
     /// Blank lines and `#` comments are ignored. Each remaining line is parsed
-    /// as an SS58 address first, then as hex; an unparseable entry aborts the
-    /// load with the offending line number.
+    /// as an SS58 address first, then as `0x`-prefixed hex; an unparseable
+    /// entry aborts the load with the offending line number.
     pub fn from_file(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
         let contents = std::fs::read_to_string(path)?;
@@ -85,13 +85,12 @@ impl Whitelist {
     }
 }
 
-/// Parse a single whitelist entry as SS58, falling back to hex.
+/// Parse a single whitelist entry as SS58, falling back to `0x`-prefixed hex.
 fn parse_sensor_id(entry: &str) -> Result<SensorId, String> {
     if let Ok(id) = SensorId::from_ss58(entry) {
         return Ok(id);
     }
-    let hex = entry.strip_prefix("0x").unwrap_or(entry);
-    SensorId::from_hex(hex).map_err(|err| format!("not a valid ss58 or hex sensor_id ({err})"))
+    SensorId::from_hex(entry).map_err(|err| format!("not a valid ss58 or hex sensor_id ({err})"))
 }
 
 impl AuthPolicy for Whitelist {
@@ -130,7 +129,7 @@ mod tests {
         let a = sensor(3);
         let b = sensor(4);
         let contents = format!(
-            "# authorized sensors\n{}\n\n0x{}  # inline comment\n",
+            "# authorized sensors\n{}\n\n{}  # inline comment\n",
             a.to_ss58(),
             b.to_hex(),
         );

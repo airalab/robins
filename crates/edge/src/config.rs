@@ -99,8 +99,8 @@ pub enum AuthMode {
 pub struct AuthConfig {
     /// Selected authentication mode.
     pub mode: AuthMode,
-    /// Path to a whitelist file (one hex `sensor_id` per line). Required when
-    /// [`AuthMode::Whitelist`] is selected.
+    /// Path to a whitelist file (one SS58 or `0x`-prefixed hex `sensor_id`
+    /// per line). Required when [`AuthMode::Whitelist`] is selected.
     pub file: Option<PathBuf>,
 }
 

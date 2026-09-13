@@ -127,8 +127,8 @@ pub struct ReceivedMessage {
 /// Load a stable Ed25519 identity, generating and persisting one if absent.
 ///
 /// When `identity_file` is `None` an ephemeral identity is generated (useful for
-/// tests and throwaway nodes). Otherwise the 32-byte secret is read as hex from
-/// the file, or created and written on first run.
+/// tests and throwaway nodes). Otherwise the 32-byte secret is read as
+/// `0x`-prefixed hex from the file, or created and written on first run.
 pub fn load_or_create_identity(
     identity_file: Option<&std::path::Path>,
 ) -> std::io::Result<libp2p::identity::Keypair> {
@@ -141,7 +141,13 @@ pub fn load_or_create_identity(
 
     if path.exists() {
         let encoded = std::fs::read_to_string(path)?;
-        let mut bytes = hex::decode(encoded.trim()).map_err(|err| {
+        let stripped = crate::protocol::strip_0x(encoded.trim()).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid identity hex in {}: {err}", path.display()),
+            )
+        })?;
+        let mut bytes = hex::decode(stripped).map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("invalid identity hex in {}: {err}", path.display()),
@@ -166,7 +172,7 @@ pub fn load_or_create_identity(
     } else {
         let mut seed = [0u8; SECRET_LEN];
         rand::rngs::OsRng.fill_bytes(&mut seed);
-        std::fs::write(path, hex::encode(seed))?;
+        std::fs::write(path, format!("0x{}", hex::encode(seed)))?;
         Keypair::ed25519_from_bytes(seed).map_err(|err| {
             std::io::Error::other(format!("failed to build ed25519 identity: {err}"))
         })

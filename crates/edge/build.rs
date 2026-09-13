@@ -52,15 +52,18 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    // Only the signed envelope is required by the gateway: telemetry payloads are
-    // opaque bytes forwarded through the pipeline untouched. Collect the relevant
-    // `.proto` files deterministically so regenerated output is stable.
+    // The gateway itself only needs the signed envelope: telemetry payloads are
+    // opaque bytes forwarded through the pipeline untouched. The `edge codec`
+    // CLI, however, also builds the complete `core.v1.Message` telemetry
+    // payload (metadata + urban/insight device readings) that is placed inside
+    // an envelope's `message` field before signing, so all vendored `.proto`
+    // files are compiled. Collect them deterministically so regenerated output
+    // is stable.
     let mut protos: Vec<_> = walkdir::WalkDir::new(proto_dir)
         .into_iter()
         .filter_map(Result::ok)
         .map(walkdir::DirEntry::into_path)
         .filter(|p| p.extension().is_some_and(|ext| ext == "proto"))
-        .filter(|p| p.to_string_lossy().contains("crypto/v1/envelope.proto"))
         .collect();
     protos.sort();
 

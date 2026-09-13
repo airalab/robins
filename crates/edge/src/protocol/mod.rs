@@ -38,17 +38,61 @@ pub mod generated {
             include!("generated/crypto.v1.rs");
         }
     }
+
+    /// `sensor.v1` protobuf package: per-device measurement payloads.
+    pub mod sensor {
+        /// `sensor.v1` protobuf package.
+        pub mod v1 {
+            include!("generated/sensor.v1.rs");
+        }
+    }
+
+    /// `device.v1` protobuf package: urban/insight board sensor groupings.
+    pub mod device {
+        /// `device.v1` protobuf package.
+        pub mod v1 {
+            include!("generated/device.v1.rs");
+        }
+    }
+
+    /// `core.v1` protobuf package: the root telemetry `Message`.
+    pub mod core {
+        /// `core.v1` protobuf package.
+        pub mod v1 {
+            include!("generated/core.v1.rs");
+        }
+    }
 }
 
-pub use generated::crypto::v1::{SignedEnvelope, SignedEnvelopeBatch};
+// `core.v1::Message` is not re-exported at the top level: the name would clash
+// with the `prost::Message` trait used throughout this module. Reach it via
+// [`sensor_message`] (e.g. `protocol::sensor_message::Message`).
+pub use generated::crypto::v1::{Encrypted, SignedEnvelope, SignedEnvelopeBatch};
+pub use generated::device::v1::{
+    EncryptedInsight, EncryptedUrban, Insight, InsightSensor, Urban, UrbanSensor,
+};
+pub use generated::sensor::v1::{
+    AirQualityIndex, Bme280, Bme680, CarbonMonoxide, Co2, Gps, Humidity, Ics43434, NitrogenDioxide,
+    NoiseLevel, Ozone, Pm10, Pm25, Pressure, Radiation, Scd41, Sds011, Temperature,
+};
+
+/// The root telemetry payload (`core.v1.Message`) carried inside a
+/// [`SignedEnvelope`]'s opaque `message` field.
+///
+/// Re-exported under a dedicated module (rather than at the top level) so the
+/// generated `Message` type does not collide with the [`prost::Message`] trait
+/// used throughout this module.
+pub mod sensor_message {
+    pub use crate::protocol::generated::core::v1::{message::Payload, Message, Meta};
+}
 
 pub use sp_core::crypto::AccountId32;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use prost::Message;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use sp_core::crypto::{Ss58AddressFormat, Ss58Codec};
+use sp_core::crypto::{Pair as _, Ss58AddressFormat, Ss58Codec};
+use sp_core::ed25519::{Pair, Public, Signature};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -119,6 +163,19 @@ impl ProtocolError {
     }
 }
 
+/// Strip the mandatory `0x` prefix from a hex-encoded input, failing if it is
+/// absent.
+///
+/// Every hex string this crate accepts (CLI flags, JSON DTOs, whitelist and
+/// key files, ...) must carry an explicit `0x` prefix, matching the
+/// convention used throughout the Connectivity Protocol tooling. This keeps
+/// hex unambiguous with other accepted encodings (SS58, base64, raw binary)
+/// and gives a single, consistent failure mode for malformed input.
+pub fn strip_0x(s: &str) -> Result<&str, ProtocolError> {
+    s.strip_prefix("0x")
+        .ok_or_else(|| ProtocolError::Hex(format!("hex value must be `0x`-prefixed, got: {s}")))
+}
+
 /// Ed25519 public key that uniquely identifies a sensor device.
 ///
 /// A `SensorId` is the raw 32-byte Ed25519 public key carried in
@@ -140,14 +197,15 @@ impl SensorId {
         AsRef::<[u8; SENSOR_ID_LEN]>::as_ref(&self.0)
     }
 
-    /// Lower-case hex encoding of the public key.
+    /// Lower-case, `0x`-prefixed hex encoding of the public key.
     pub fn to_hex(&self) -> String {
-        hex::encode(self.as_bytes())
+        format!("0x{}", hex::encode(self.as_bytes()))
     }
 
-    /// Parse a `SensorId` from a hex-encoded 32-byte public key.
+    /// Parse a `SensorId` from a `0x`-prefixed hex-encoded 32-byte public key.
     pub fn from_hex(s: &str) -> Result<Self, ProtocolError> {
-        let bytes = hex::decode(s.trim()).map_err(|e| ProtocolError::Hex(e.to_string()))?;
+        let bytes =
+            hex::decode(strip_0x(s.trim())?).map_err(|e| ProtocolError::Hex(e.to_string()))?;
         Self::from_slice(&bytes)
     }
 
@@ -179,11 +237,6 @@ impl SensorId {
             .try_into()
             .map_err(|_| ProtocolError::SensorIdLen(bytes.len()))?;
         Ok(Self(AccountId32::new(arr)))
-    }
-
-    /// Recover the Ed25519 verifying key, rejecting non-curve points.
-    fn verifying_key(&self) -> Result<VerifyingKey, ProtocolError> {
-        VerifyingKey::from_bytes(self.as_bytes()).map_err(|_| ProtocolError::SensorKey)
     }
 }
 
@@ -225,9 +278,9 @@ impl EnvelopeId {
         &self.0
     }
 
-    /// Lower-case hex encoding of the digest.
+    /// Lower-case, `0x`-prefixed hex encoding of the digest.
     pub fn to_hex(&self) -> String {
-        hex::encode(self.0)
+        format!("0x{}", hex::encode(self.0))
     }
 }
 
@@ -270,7 +323,7 @@ pub struct SignOptions {
 /// A sensor's Ed25519 signing identity (private key + derived public key).
 #[derive(Clone)]
 pub struct SensorIdentity {
-    signing: SigningKey,
+    pair: Pair,
 }
 
 impl SensorIdentity {
@@ -284,28 +337,30 @@ impl SensorIdentity {
     /// Construct an identity from a raw 32-byte Ed25519 secret key.
     pub fn from_secret_bytes(secret: &[u8; SENSOR_ID_LEN]) -> Self {
         Self {
-            signing: SigningKey::from_bytes(secret),
+            pair: Pair::from_seed(secret),
         }
     }
 
-    /// Parse an identity from a hex-encoded 32-byte Ed25519 secret key.
-    pub fn from_hex(s: &str) -> Result<Self, ProtocolError> {
-        let bytes = hex::decode(s.trim()).map_err(|e| ProtocolError::Hex(e.to_string()))?;
-        let arr: [u8; SENSOR_ID_LEN] = bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| ProtocolError::SensorIdLen(bytes.len()))?;
-        Ok(Self::from_secret_bytes(&arr))
+    /// Parse an identity from a Substrate SURI: a mandatory `0x`-prefixed
+    /// 64-digit hex secret seed, or a BIP-39 recovery phrase, optionally
+    /// followed by `//hard` / `/soft` derivation junctions and a `///password`.
+    /// A hex seed without the `0x` prefix is rejected (interpreted, and
+    /// failing, as a BIP-39 phrase). See [`sp_core::crypto::Pair::from_string`]
+    /// for the full grammar.
+    pub fn from_suri(suri: &str) -> Result<Self, ProtocolError> {
+        Pair::from_string(suri.trim(), None)
+            .map(|pair| Self { pair })
+            .map_err(|e| ProtocolError::Hex(format!("invalid SURI: {e:?}")))
     }
 
     /// The public [`SensorId`] derived from this identity.
     pub fn sensor_id(&self) -> SensorId {
-        SensorId(AccountId32::new(self.signing.verifying_key().to_bytes()))
+        SensorId(AccountId32::new(self.pair.public().0))
     }
 
-    /// Hex encoding of the raw 32-byte secret key. Handle with care.
+    /// `0x`-prefixed hex encoding of the raw 32-byte secret key. Handle with care.
     pub fn secret_to_hex(&self) -> String {
-        hex::encode(self.signing.to_bytes())
+        format!("0x{}", hex::encode(self.pair.seed()))
     }
 }
 
@@ -335,6 +390,19 @@ pub fn encode_envelope(envelope: &SignedEnvelope) -> Vec<u8> {
 pub fn envelope_id(bytes: &[u8]) -> EnvelopeId {
     let digest = Sha256::digest(bytes);
     EnvelopeId(digest.into())
+}
+
+/// Decode a `core.v1.Message` (the complete sensor telemetry payload) from
+/// protobuf wire bytes, i.e. the bytes carried in a [`SignedEnvelope::message`]
+/// field.
+pub fn decode_sensor_message(bytes: &[u8]) -> Result<sensor_message::Message, ProtocolError> {
+    sensor_message::Message::decode(bytes).map_err(|e| ProtocolError::Decode(e.to_string()))
+}
+
+/// Encode a `core.v1.Message` (the complete sensor telemetry payload) to
+/// protobuf wire bytes, ready to place in a [`SignedEnvelope::message`] field.
+pub fn encode_sensor_message(message: &sensor_message::Message) -> Vec<u8> {
+    message.encode_to_vec()
 }
 
 /// Canonical byte string that the Ed25519 `signature` covers.
@@ -386,18 +454,18 @@ pub fn validate_envelope(envelope: &SignedEnvelope) -> Result<SensorId, Protocol
 /// verified in place; its bytes are never re-encoded (see [`encode_envelope`]).
 pub fn verify_envelope(envelope: &SignedEnvelope) -> Result<VerifiedEnvelope, ProtocolError> {
     let sensor_id = validate_envelope(envelope)?;
-    let verifying_key = sensor_id.verifying_key()?;
+    let public = Public::from_raw(*sensor_id.as_bytes());
 
     let sig_bytes: [u8; SIGNATURE_LEN] = envelope
         .signature
         .as_slice()
         .try_into()
         .map_err(|_| ProtocolError::SignatureLen(envelope.signature.len()))?;
-    let signature = Signature::from_bytes(&sig_bytes);
+    let signature = Signature::from_raw(sig_bytes);
 
-    verifying_key
-        .verify(&signing_payload(envelope), &signature)
-        .map_err(|_| ProtocolError::BadSignature)?;
+    if !Pair::verify(&signature, signing_payload(envelope), &public) {
+        return Err(ProtocolError::BadSignature);
+    }
 
     Ok(VerifiedEnvelope {
         sensor_id,
@@ -427,8 +495,8 @@ pub fn sign_message(
         signature: Vec::new(),
     };
 
-    let signature = identity.signing.sign(&signing_payload(&envelope));
-    envelope.signature = signature.to_bytes().to_vec();
+    let signature = identity.pair.sign(&signing_payload(&envelope));
+    envelope.signature = signature.0.to_vec();
     envelope
 }
 

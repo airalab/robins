@@ -46,16 +46,10 @@ fn run_edge(args: &[&str], stdin: &[u8]) -> (i32, String, String) {
     )
 }
 
-/// A deterministic 32-byte Ed25519 secret key, hex-encoded, for reproducibility.
-const KEY_HEX: &str = "0707070707070707070707070707070707070707070707070707070707070707";
-
-/// Write the fixture key to a temp file and return its path.
-fn write_key() -> std::path::PathBuf {
-    let dir = std::env::temp_dir();
-    let path = dir.join(format!("edge-it-key-{}.hex", std::process::id()));
-    std::fs::write(&path, KEY_HEX).expect("write key");
-    path
-}
+/// A deterministic 32-byte Ed25519 secret key, `0x`-prefixed hex, for
+/// reproducibility (raw hex seeds must carry the `0x` prefix; see
+/// [`SensorIdentity::from_suri`](edge::protocol::SensorIdentity::from_suri)).
+const KEY_HEX: &str = "0x0707070707070707070707070707070707070707070707070707070707070707";
 
 #[test]
 fn version_prints_and_succeeds() {
@@ -66,20 +60,16 @@ fn version_prints_and_succeeds() {
 
 #[test]
 fn sign_verify_id_pipeline() {
-    let key = write_key();
-    let key_str = key.to_str().unwrap();
-
     // Sign a message, emitting the envelope as hex.
     let (code, envelope_hex, stderr) = run_edge(
         &[
-            "key",
-            "sign",
-            "--key",
-            key_str,
+            "envelope",
+            "--sign",
+            KEY_HEX,
             "--timestamp",
             "1700000000000",
             "--nonce",
-            "00112233445566778899aabbccddeeff",
+            "0x00112233445566778899aabbccddeeff",
             "--input",
             "binary",
             "--output",
@@ -91,43 +81,45 @@ fn sign_verify_id_pipeline() {
     let envelope_hex = envelope_hex.trim().to_string();
     assert!(!envelope_hex.is_empty());
 
-    // Verify the freshly signed envelope: exit 0, "valid".
-    let (code, stdout, _) = run_edge(
-        &["key", "verify", "--input", "hex"],
+    // Verify the freshly signed envelope: exit 0, diagnostic on stderr.
+    let (code, _, stderr) = run_edge(
+        &["envelope", "--verify", "--input", "hex", "--output", "hex"],
         envelope_hex.as_bytes(),
     );
     assert_eq!(code, 0);
-    assert_eq!(stdout.trim(), "valid");
+    assert!(stderr.contains("signature: valid"), "stderr: {stderr}");
 
-    // The dedup id is a stable 32-byte SHA-256 (64 hex chars).
-    let (code, id_out, _) = run_edge(&["codec", "id", "--input", "hex"], envelope_hex.as_bytes());
+    // The dedup id is a stable 32-byte SHA-256 (64 hex chars), `0x`-prefixed,
+    // printed on stderr for non-JSON decode output.
+    let (code, _, id_stderr) = run_edge(&["envelope", "--input", "hex"], envelope_hex.as_bytes());
     assert_eq!(code, 0);
-    assert_eq!(id_out.trim().len(), 64);
+    let id_line = id_stderr
+        .lines()
+        .find(|l| l.starts_with("message_id: "))
+        .expect("message_id line");
+    let message_id = id_line.trim_start_matches("message_id: ");
+    assert!(message_id.starts_with("0x"), "{message_id}");
+    assert_eq!(message_id.trim_start_matches("0x").len(), 64);
 
     // A round-trip through JSON reproduces the exact wire bytes.
     let (code, json, _) = run_edge(
-        &["codec", "decode", "--input", "hex", "--output", "json"],
+        &["envelope", "--input", "hex", "--output", "json"],
         envelope_hex.as_bytes(),
     );
     assert_eq!(code, 0);
     let (code, reencoded, _) = run_edge(
-        &["codec", "encode", "--input", "json", "--output", "hex"],
+        &["envelope", "--input", "json", "--output", "hex"],
         json.as_bytes(),
     );
     assert_eq!(code, 0);
     assert_eq!(reencoded.trim(), envelope_hex);
-
-    let _ = std::fs::remove_file(&key);
 }
 
 #[test]
 fn tampered_envelope_fails_verification() {
-    let key = write_key();
-    let key_str = key.to_str().unwrap();
-
     let (_, envelope_hex, _) = run_edge(
         &[
-            "key", "sign", "--key", key_str, "--input", "binary", "--output", "hex",
+            "envelope", "--sign", KEY_HEX, "--input", "binary", "--output", "hex",
         ],
         b"payload",
     );
@@ -136,18 +128,19 @@ fn tampered_envelope_fails_verification() {
     let last = bytes.pop().unwrap();
     bytes.push(if last == '0' { '1' } else { '0' });
 
-    let (code, _, stderr) = run_edge(&["key", "verify", "--input", "hex"], bytes.as_bytes());
+    let (code, _, stderr) = run_edge(
+        &["envelope", "--verify", "--input", "hex"],
+        bytes.as_bytes(),
+    );
     assert_eq!(
         code, 1,
         "expected invalid-signature exit code; stderr: {stderr}"
     );
-
-    let _ = std::fs::remove_file(&key);
 }
 
 #[test]
-fn node_reports_unimplemented() {
-    let (code, _, stderr) = run_edge(&["node"], b"");
+fn sensor_reports_unimplemented() {
+    let (code, _, stderr) = run_edge(&["sensor"], b"");
     assert_eq!(code, 1);
     assert!(stderr.contains("not yet implemented"), "stderr: {stderr}");
 }
@@ -176,9 +169,6 @@ fn key_generate_reports_identity() {
 
 #[test]
 fn key_inspect_matches_generate_and_sign() {
-    let key = write_key();
-    let key_str = key.to_str().unwrap();
-
     // Inspect the fixture key URI (hex secret seed): JSON exposes a stable SS58.
     let (code, json, stderr) = run_edge(&["key", "inspect", KEY_HEX, "--output", "json"], b"");
     assert_eq!(code, 0, "inspect failed: {stderr}");
@@ -203,19 +193,19 @@ fn key_inspect_matches_generate_and_sign() {
     // The same key signing an envelope must verify to the same sensor_id.
     let (_, envelope_hex, _) = run_edge(
         &[
-            "key", "sign", "--key", key_str, "--input", "binary", "--output", "hex",
+            "envelope", "--sign", KEY_HEX, "--input", "binary", "--output", "hex",
         ],
         b"telemetry",
     );
     let (code, verify_json, _) = run_edge(
-        &["key", "verify", "--input", "hex", "--output", "json"],
+        &["envelope", "--verify", "--input", "hex", "--output", "json"],
         envelope_hex.trim().as_bytes(),
     );
     assert_eq!(code, 0);
     let verified: serde_json::Value = serde_json::from_str(&verify_json).expect("valid json");
-    assert_eq!(verified["sensor_id"].as_str().unwrap(), ss58);
-
-    let _ = std::fs::remove_file(&key);
+    let sensor_id_hex = verified["sensor_id"].as_str().unwrap().to_string();
+    let sensor_id = edge::protocol::SensorId::from_hex(&sensor_id_hex).expect("valid sensor_id");
+    assert_eq!(sensor_id.to_ss58(), ss58);
 }
 
 #[test]

@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Robonomics Edge Gateway: connectivity ingress for embedded devices"
+description = "Connectivity ingress for embedded devices"
 readme = "README.md"
 keywords = ["robonomics", "connectivity", "edge", "iot", "libp2p"]
 categories = ["network-programming"]
@@ -31,7 +31,6 @@ bytes.workspace = true
 hex.workspace = true
 sha2.workspace = true
 sp-core.workspace = true
-ed25519-dalek.workspace = true
 rand.workspace = true
 axum.workspace = true
 tracing.workspace = true
@@ -45,6 +44,10 @@ env_logger = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 log.workspace = true
+# Used by `edge message` to encrypt `private:` sections (ECDH + AEAD) via
+# `libcps::crypto::Cipher`. Only the `crypto` module is needed, so CLI/
+# blockchain features are disabled.
+libcps = { workspace = true, optional = true }
 
 # Connectivity Protocol runtime. The wire types are generated (and committed)
 # from the vendored `.proto` files under `src/protobufs/` with `prost-build` and
@@ -69,7 +72,13 @@ tower = { version = "0.5", features = ["util"] }
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:env_logger", "dep:base64", "dep:serde_json"]
+cli = [
+  "dep:clap",
+  "dep:env_logger",
+  "dep:base64",
+  "dep:serde_json",
+  "dep:libcps",
+]
 # Developer-only: regenerate the committed Connectivity Protocol module from the
 # vendored `.proto` sources. Run `cargo build -p edge --features gen`.
 gen = ["dep:prost-build", "dep:protoc-bin-vendored", "dep:walkdir"]
