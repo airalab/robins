@@ -1356,6 +1356,7 @@ mod tests {
         let msg = sample_urban();
         let json = MessageJson::from_proto(&msg, None).unwrap();
         let text = serde_json::to_string_pretty(&json).unwrap();
+        eprintln!("DEBUG_JSON:\n{text}\nDEBUG_CWD: {:?}", std::env::current_dir());
         let parsed: MessageJson = serde_json::from_str(&text).unwrap();
         let back = parsed.into_proto().unwrap();
         assert_eq!(msg, back);

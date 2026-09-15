@@ -15,6 +15,9 @@ path = "src/main.rs"
 [dependencies]
 polkadot-jemalloc-shim.workspace = true
 polkadot-omni-node-lib.workspace = true
+robonomics-chain-spec.workspace = true
+robonomics-runtime.workspace = true
+sp-genesis-builder.workspace = true
 color-eyre.workspace = true
 rustls.workspace = true
 

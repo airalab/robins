@@ -46,7 +46,6 @@ impl CliConfigT for CliConfig {
     }
 }
 
-/* TODO
 fn robonomics_development_config() -> Result<GenericChainSpec, String> {
     let config = GenericChainSpec::builder(
         robonomics_runtime::dev::WASM_BINARY.ok_or("wasm not available")?,
@@ -59,7 +58,6 @@ fn robonomics_development_config() -> Result<GenericChainSpec, String> {
     Ok(config)
 }
 
-#[cfg(feature = "dev-runtime")]
 fn robonomics_localnet_config() -> Result<GenericChainSpec, String> {
     let config = GenericChainSpec::builder(
         robonomics_runtime::dev::WASM_BINARY.ok_or("wasm not available")?,
@@ -71,7 +69,6 @@ fn robonomics_localnet_config() -> Result<GenericChainSpec, String> {
     .build();
     Ok(config)
 }
-*/
 
 /// OMNI chain spec loader with buildin robonomics chains.
 struct RobonomicsChainSpecLoader;
@@ -79,16 +76,14 @@ struct RobonomicsChainSpecLoader;
 impl LoadSpec for RobonomicsChainSpecLoader {
     fn load_spec(&self, path: &str) -> Result<Box<dyn ChainSpec>, String> {
         Ok(Box::new(match path {
-            /*
             "" | "polkadot" => GenericChainSpec::from_json_bytes(
-                &include_bytes!("../chains/polkadot-parachain.raw.json")[..],
+                robonomics_chain_spec::POLKADOT_PARACHAIN_RAW.as_bytes()
             )?,
             "kusama" => GenericChainSpec::from_json_bytes(
-                &include_bytes!("../chains/kusama-parachain.raw.json")[..],
+                robonomics_chain_spec::KUSAMA_PARACHAIN_RAW.as_bytes()
             )?,
             "local" => robonomics_localnet_config()?,
             "dev" => robonomics_development_config()?,
-            */
             path => GenericChainSpec::from_json_file(path.into())?,
         }))
     }

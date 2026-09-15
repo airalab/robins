@@ -16,22 +16,10 @@ lto = true
 codegen-units = 1
 
 [workspace]
-members = [
-  "crates/robonomics",
-  "crates/libcps",
-  "crates/mqtt-bridge",
-  "crates/edge",
-]
-exclude = ["tools/robonet"]
+members = ["crates/*"]
 resolver = "2"
 
 [workspace.dependencies]
-libcps = { path = "./crates/libcps", default-features = false }
-mqtt-bridge = { path = "./crates/mqtt-bridge", default-features = false }
-robonet.path = "./crates/robonet"
-
-robonomics-runtime-subxt-api.path = "../robonomics/runtime/robonomics/subxt-api"
-
 bs58 = "0.5.0"
 clap = { version = "4.2.5", features = ["derive"] }
 color-eyre = { version = "0.6.3", default-features = false }
@@ -69,6 +57,7 @@ polkadot-jemalloc-shim = "0.8.0"
 substrate-build-script-utils = "11.0.3"
 parity-scale-codec = "3.6.1"
 sp-core = "43.0.0"
+sp-genesis-builder = "0.24.0"
 serde = "1.0.171"
 serde_json = "1.0.138"
 ed25519-dalek = "2.1"
@@ -92,3 +81,7 @@ libp2p = { version = "0.54", features = [
   "tokio",
   "ed25519",
 ] }
+robonomics-chain-spec = "50.0.0"
+robonomics-runtime-subxt-api = "50.0.0"
+robonomics-runtime = "50.0.0"
+libcps = { version = "0.6.0", path = "./crates/libcps", default-features = false }
