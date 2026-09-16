@@ -53,7 +53,11 @@ EXAMPLES:
 
     # Verify an envelope's signature while decoding it; exits non-zero (and
     # prints nothing to stdout) if the signature does not check out.
-    cat envelope.bin | edge envelope --verify --output hex")]
+    cat envelope.bin | edge envelope --verify --output hex
+
+    # Print the envelope's dedup id (SHA-256 of the wire bytes) to stderr
+    # while decoding.
+    cat envelope.bin | edge envelope --id --output hex")]
 pub(crate) struct EnvelopeArgs {
     /// Envelope data, or (with `--sign`) the raw message to sign. If
     /// omitted, reads from stdin. Decoded per `--input` (or sniffed:
@@ -85,6 +89,11 @@ pub(crate) struct EnvelopeArgs {
     /// with a non-zero status (and no stdout) if it does not verify.
     #[arg(long)]
     verify: bool,
+    /// Print the envelope's dedup id (SHA-256 of the encoded wire bytes) to
+    /// stderr as `message_id: <hex>`. Diagnostics only; stdout stays a clean
+    /// data stream.
+    #[arg(long)]
+    id: bool,
 }
 
 /// Dispatch `edge envelope`.
@@ -92,12 +101,14 @@ pub(crate) fn run(args: EnvelopeArgs) -> CliResult {
     let (env, wire) = if let Some(suri) = &args.sign {
         sign(suri, &args)?
     } else {
-        let (env, wire) = decode(&args)?;
+        decode(&args)?
+    };
+
+    if args.id {
         // Diagnostics only; stdout stays a clean data stream.
         let message_id = protocol::envelope_id(&wire).to_hex();
         eprintln!("message_id: {message_id}");
-        (env, wire)
-    };
+    }
 
     if args.verify {
         // Propagates the signature/protocol exit-code contract (`1` invalid,

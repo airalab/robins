@@ -36,7 +36,7 @@
 //! ```
 //!
 //! - `--board`/`-b` (`urban` or `insight`) selects `Message.payload` for the
-//!   whole command; it is required whenever measurement values are given.
+//!   whole command; defaults to `urban` when measurement values are given.
 //! - `<recipient>`: SS58 or `0x`-prefixed hex public key, only allowed after
 //!   a `private:` prefix. Private measurements are grouped by recipient,
 //!   serialized together, and encrypted once per recipient via `libcps`
@@ -93,10 +93,10 @@ pub(crate) struct MessageArgs {
     /// from stdin instead.
     #[arg(value_name = "MEASUREMENT")]
     values: Vec<String>,
-    /// Device board for compact measurement encoding; required whenever
-    /// measurement values are given.
-    #[arg(short, long, value_enum)]
-    board: Option<BoardArg>,
+    /// Device board for compact measurement encoding; defaults to `urban`
+    /// when measurement values are given.
+    #[arg(short, long, value_enum, default_value = "urban")]
+    board: BoardArg,
     /// Force the input representation of encoded DATA (otherwise sniffed:
     /// hex/base64/binary wire bytes, or JSON). Not used for compact
     /// measurement encoding.
@@ -170,17 +170,14 @@ enum MessageFormat {
 /// Three modes, selected structurally rather than by sniffing stdin bytes:
 ///
 /// - one or more `values` with no `--input`: compact measurement argv mode
-///   (requires `--board`);
+///   (defaults `--board` to `urban`);
 /// - no `values`: read encoded/structured data from stdin (`--input`
 ///   forced or sniffed);
 /// - one `values` entry with an explicit `--input`: treat it as encoded DATA
 ///   rather than a measurement (decode/convert convenience).
 pub(crate) fn run(args: MessageArgs) -> CliResult {
     let wire = if args.input.is_none() && !args.values.is_empty() {
-        let board = args.board.ok_or_else(|| {
-            CliError::usage("`--board` is required to encode compact measurements")
-        })?;
-        let mut msg = compact::parse(board.into(), &args.values, args.suri.as_deref())?;
+        let mut msg = compact::parse(args.board.into(), &args.values, args.suri.as_deref())?;
         apply_owner(&mut msg, args.owner.as_deref())?;
         protocol::encode_sensor_message(&msg)
     } else {

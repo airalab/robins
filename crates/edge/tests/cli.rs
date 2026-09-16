@@ -90,8 +90,11 @@ fn sign_verify_id_pipeline() {
     assert!(stderr.contains("signature: valid"), "stderr: {stderr}");
 
     // The dedup id is a stable 32-byte SHA-256 (64 hex chars), `0x`-prefixed,
-    // printed on stderr for non-JSON decode output.
-    let (code, _, id_stderr) = run_edge(&["envelope", "--input", "hex"], envelope_hex.as_bytes());
+    // printed on stderr when `--id` is requested.
+    let (code, _, id_stderr) = run_edge(
+        &["envelope", "--input", "hex", "--id"],
+        envelope_hex.as_bytes(),
+    );
     assert_eq!(code, 0);
     let id_line = id_stderr
         .lines()
