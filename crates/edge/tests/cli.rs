@@ -101,18 +101,16 @@ fn sign_verify_id_pipeline() {
     assert!(message_id.starts_with("0x"), "{message_id}");
     assert_eq!(message_id.trim_start_matches("0x").len(), 64);
 
-    // A round-trip through JSON reproduces the exact wire bytes.
-    let (code, json, _) = run_edge(
-        &["envelope", "--input", "hex", "--output", "json"],
+    // Decoding renders a human-readable `text` dump (forced explicitly here,
+    // since the default depends on whether stdout is a terminal) containing
+    // the envelope's fields.
+    let (code, text, _) = run_edge(
+        &["envelope", "--input", "hex", "--output", "text"],
         envelope_hex.as_bytes(),
     );
     assert_eq!(code, 0);
-    let (code, reencoded, _) = run_edge(
-        &["envelope", "--input", "json", "--output", "hex"],
-        json.as_bytes(),
-    );
-    assert_eq!(code, 0);
-    assert_eq!(reencoded.trim(), envelope_hex);
+    assert!(text.contains("SignedEnvelope"), "got: {text}");
+    assert!(text.contains("sensor_id"), "got: {text}");
 }
 
 #[test]
@@ -197,15 +195,20 @@ fn key_inspect_matches_generate_and_sign() {
         ],
         b"telemetry",
     );
-    let (code, verify_json, _) = run_edge(
-        &["envelope", "--verify", "--input", "hex", "--output", "json"],
+    let (code, _, verify_stderr) = run_edge(
+        &["envelope", "--verify", "--input", "hex", "--output", "hex"],
         envelope_hex.trim().as_bytes(),
     );
     assert_eq!(code, 0);
-    let verified: serde_json::Value = serde_json::from_str(&verify_json).expect("valid json");
-    let sensor_id_hex = verified["sensor_id"].as_str().unwrap().to_string();
-    let sensor_id = edge::protocol::SensorId::from_hex(&sensor_id_hex).expect("valid sensor_id");
-    assert_eq!(sensor_id.to_ss58(), ss58);
+    // `signature: valid (<ss58>)` is printed as a diagnostic on stderr.
+    let valid_line = verify_stderr
+        .lines()
+        .find(|l| l.starts_with("signature: valid"))
+        .expect("signature: valid line");
+    let verified_ss58 = valid_line
+        .trim_start_matches("signature: valid (")
+        .trim_end_matches(')');
+    assert_eq!(verified_ss58, ss58);
 }
 
 #[test]

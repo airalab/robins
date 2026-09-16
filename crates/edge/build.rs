@@ -71,5 +71,19 @@ fn main() -> std::io::Result<()> {
 
     let mut config = prost_build::Config::new();
     config.out_dir(out_dir);
-    config.compile_protos(&protos, &[proto_dir])
+    config.compile_protos(&protos, &[proto_dir])?;
+
+    // The committed output is checked by the repository's license header CI
+    // job, so every regenerated `.rs` file needs the Apache-2.0 header
+    // prepended (prost-build has no hook to inject it itself).
+    const LICENSE_HEADER: &str = include_str!("../../.github/license-check/HEADER-APACHE2");
+    for entry in std::fs::read_dir(out_dir)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "rs") {
+            let body = std::fs::read_to_string(&path)?;
+            std::fs::write(&path, format!("{LICENSE_HEADER}\n{body}"))?;
+        }
+    }
+
+    Ok(())
 }

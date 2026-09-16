@@ -77,10 +77,10 @@ impl LoadSpec for RobonomicsChainSpecLoader {
     fn load_spec(&self, path: &str) -> Result<Box<dyn ChainSpec>, String> {
         Ok(Box::new(match path {
             "" | "polkadot" => GenericChainSpec::from_json_bytes(
-                robonomics_chain_spec::POLKADOT_PARACHAIN_RAW.as_bytes()
+                robonomics_chain_spec::POLKADOT_PARACHAIN_RAW.as_bytes(),
             )?,
             "kusama" => GenericChainSpec::from_json_bytes(
-                robonomics_chain_spec::KUSAMA_PARACHAIN_RAW.as_bytes()
+                robonomics_chain_spec::KUSAMA_PARACHAIN_RAW.as_bytes(),
             )?,
             "local" => robonomics_localnet_config()?,
             "dev" => robonomics_development_config()?,

@@ -42,6 +42,7 @@ futures.workspace = true
 clap = { workspace = true, features = ["env"], optional = true }
 env_logger = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
+colored = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 log.workspace = true
 # Used by `edge message` to encrypt `private:` sections (ECDH + AEAD) via
@@ -76,6 +77,7 @@ cli = [
   "dep:clap",
   "dep:env_logger",
   "dep:base64",
+  "dep:colored",
   "dep:serde_json",
   "dep:libcps",
 ]

@@ -152,6 +152,12 @@ enum Command {
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
     init_logging(&cli);
+    if cli.no_color {
+        // Also disables `colored` output on stdout (used by `edge envelope`
+        // and `edge message`'s human-readable `text` rendering), not just
+        // `env_logger`'s stderr output.
+        colored::control::set_override(false);
+    }
 
     let result = match cli.command {
         Command::Gateway { config } => run_gateway(config),

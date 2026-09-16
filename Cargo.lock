@@ -3976,6 +3976,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "clap",
+ "colored",
  "env_logger",
  "futures",
  "hex",

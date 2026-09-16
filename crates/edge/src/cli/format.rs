@@ -39,7 +39,8 @@ pub(crate) enum ByteFormat {
     Hex,
 }
 
-/// Representation for structured messages: byte formats plus JSON.
+/// Representation for structured messages: byte formats plus a
+/// human-readable debug rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum ReprFormat {
     /// Raw protobuf wire bytes.
@@ -48,8 +49,9 @@ pub(crate) enum ReprFormat {
     Base64,
     /// Hex-encoded protobuf wire bytes, mandatory `0x` prefix.
     Hex,
-    /// Structured JSON with `0x`-prefixed hex-encoded byte fields.
-    Json,
+    /// Human-readable pretty-printed debug rendering of the decoded
+    /// protobuf struct (decode direction only).
+    Text,
 }
 
 /// Rendering for report-style output (`key generate`/`inspect`/`verify`).
@@ -59,16 +61,6 @@ pub(crate) enum ReportFormat {
     Text,
     /// Machine-readable JSON.
     Json,
-}
-
-/// Direction a command should operate in, chosen by sniffing the input when
-/// no explicit `--input`/`--output` format is given.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Direction {
-    /// Structured representation → protobuf wire bytes.
-    Encode,
-    /// Protobuf wire bytes → structured representation.
-    Decode,
 }
 
 /// Read all bytes from `stdin`.
@@ -121,17 +113,38 @@ pub(crate) fn protocol_err(err: ProtocolError) -> CliError {
     CliError::with_code(err.exit_code() as u8, err.to_string())
 }
 
-/// Sniff whether `raw` looks like a structured JSON document (→ [`Direction::Encode`])
-/// or wire bytes in some byte format (→ [`Direction::Decode`]).
-///
-/// JSON is detected by successfully parsing `raw` as a `serde_json::Value`;
-/// anything else is treated as wire bytes to decode.
-pub(crate) fn sniff_direction(raw: &[u8]) -> Direction {
-    if serde_json::from_slice::<serde_json::Value>(raw).is_ok() {
-        Direction::Encode
-    } else {
-        Direction::Decode
-    }
+// ---------------------------------------------------------------------------
+// Pretty text rendering
+// ---------------------------------------------------------------------------
+//
+// Shared styling for the `text` output of `edge envelope`/`edge message`,
+// matching the ASCII tree/bracket-tag look used by `libcps`'s CLI (see
+// `libcps::display`): a bold heading, then `|--`/`` `-- `` branches with a
+// short bracketed `[TAG]`. Colour is applied unconditionally here; `colored`
+// itself decides whether to actually emit ANSI codes (it auto-detects a
+// non-terminal stdout, and honours `NO_COLOR`/`CLICOLOR`, plus the explicit
+// `--no-color` flag wired in `cli::run` via `colored::control::set_override`).
+
+use colored::Colorize;
+
+/// Print a bold heading line tagged `[TAG]` (e.g. the struct name being
+/// rendered).
+pub(crate) fn heading(tag: &str, title: impl std::fmt::Display) {
+    println!("{} {}", tag_label(tag), title.to_string().bold());
+}
+
+/// Print one ASCII tree line at nesting level `indent` (0 = directly under
+/// the heading), using a middle branch (`|--`) or final branch (`` `-- ``)
+/// depending on `is_last`.
+pub(crate) fn line(indent: usize, is_last: bool, tag: &str, text: impl std::fmt::Display) {
+    let pad = "    ".repeat(indent);
+    let glyph = if is_last { "`--" } else { "|--" };
+    println!("{pad}{} {} {text}", glyph.bright_black(), tag_label(tag));
+}
+
+/// A short bracketed tag (e.g. `[S]`), styled consistently across lines.
+fn tag_label(tag: &str) -> colored::ColoredString {
+    format!("[{tag}]").bright_yellow().bold()
 }
 
 /// Sniff which [`ByteFormat`] `raw` is encoded in, for the decode direction.
@@ -181,12 +194,6 @@ mod tests {
     fn wire_from_input_hex_requires_0x_prefix() {
         let err = wire_from_input(b"deadbeef", ByteFormat::Hex).unwrap_err();
         assert!(err.message.contains("0x"), "{}", err.message);
-    }
-
-    #[test]
-    fn sniff_direction_detects_json() {
-        assert_eq!(sniff_direction(b"{\"a\":1}"), Direction::Encode);
-        assert_eq!(sniff_direction(b"0xdeadbeef"), Direction::Decode);
     }
 
     #[test]
