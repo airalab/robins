@@ -157,36 +157,43 @@ fn key_generate_reports_identity() {
     assert_eq!(code, 0);
     assert!(stdout.contains("Secret seed:"), "got: {stdout}");
     assert!(stdout.contains("SS58 Address:"), "got: {stdout}");
-
-    let (code, json, _) = run_edge(&["key", "generate", "--output", "json"], b"");
-    assert_eq!(code, 0);
-    let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
-    assert!(value["ss58Address"].is_string());
-    assert!(value["publicKey"].as_str().unwrap().starts_with("0x"));
 }
 
 #[test]
 fn key_inspect_matches_generate_and_sign() {
-    // Inspect the fixture key URI (hex secret seed): JSON exposes a stable SS58.
-    let (code, json, stderr) = run_edge(&["key", "inspect", KEY_HEX, "--output", "json"], b"");
+    // Inspect the fixture key URI (hex secret seed): text output exposes a
+    // stable SS58 and the secret seed.
+    let (code, text, stderr) = run_edge(&["key", "inspect", KEY_HEX], b"");
     assert_eq!(code, 0, "inspect failed: {stderr}");
-    let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
-    let ss58 = value["ss58Address"].as_str().expect("ss58").to_string();
+    let ss58_line = text
+        .lines()
+        .find(|l| l.starts_with("SS58 Address:"))
+        .expect("SS58 Address line");
+    let ss58 = ss58_line
+        .trim_start_matches("SS58 Address:")
+        .trim()
+        .to_string();
     assert!(!ss58.is_empty());
     assert!(
-        value.get("secretSeed").is_some(),
+        text.lines().any(|l| l.starts_with("Secret seed:")),
         "secret expected for seed URI"
     );
 
     // Inspecting the public SS58 URI must omit any secret material.
-    let (code, pub_json, _) = run_edge(&["key", "inspect", &ss58, "--output", "json"], b"");
+    let (code, pub_text, _) = run_edge(&["key", "inspect", &ss58], b"");
     assert_eq!(code, 0);
-    let pub_value: serde_json::Value = serde_json::from_str(&pub_json).expect("valid json");
     assert!(
-        pub_value.get("secretSeed").is_none(),
+        !pub_text.lines().any(|l| l.starts_with("Secret seed:")),
         "public inspect leaked secret"
     );
-    assert_eq!(pub_value["ss58Address"].as_str().unwrap(), ss58);
+    let pub_ss58_line = pub_text
+        .lines()
+        .find(|l| l.starts_with("SS58 Address:"))
+        .expect("SS58 Address line");
+    assert_eq!(
+        pub_ss58_line.trim_start_matches("SS58 Address:").trim(),
+        ss58
+    );
 
     // The same key signing an envelope must verify to the same sensor_id.
     let (_, envelope_hex, _) = run_edge(

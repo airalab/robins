@@ -21,27 +21,32 @@
 //! Like `edge envelope`, this is a single auto-detecting command rather than
 //! separate `encode`/`decode` subcommands. Decoding renders the message as a
 //! human-readable debug dump of the decoded protobuf struct. Encoding accepts
-//! a compact line-oriented grammar (one measurement per line) so telemetry
-//! can be hand-written or scripted directly, without an intermediate DTO:
+//! compact measurements directly as argv values — the shell already
+//! tokenizes for us, so there is no line/comment grammar to parse:
 //!
-//! ```text
-//! [<section>:] [<recipient>/] [<board>/] [<sensor>.] <measurement>=<value>
+//! ```sh
+//! edge m -b urban temp=21.5 humidity=44 gps=51.5,-0.12,35
 //! ```
 //!
-//! - `<section>`: `public` (default, may be omitted) or `private`.
-//! - `<recipient>`: SS58 or `0x`-prefixed hex public key; required (and only
-//!   allowed) under `private`. Private measurements are grouped by recipient,
+//! Each positional value is one measurement:
+//!
+//! ```text
+//! [<sensor>.]<measurement>=<value>
+//! private:<recipient>/[<sensor>.]<measurement>=<value>
+//! ```
+//!
+//! - `--board`/`-b` (`urban` or `insight`) selects `Message.payload` for the
+//!   whole command; it is required whenever measurement values are given.
+//! - `<recipient>`: SS58 or `0x`-prefixed hex public key, only allowed after
+//!   a `private:` prefix. Private measurements are grouped by recipient,
 //!   serialized together, and encrypted once per recipient via `libcps`
 //!   (`--suri` selects the sender identity).
-//! - `<board>`: `urban` or `insight` — selects `Message.payload`. Optional
-//!   when it can be inferred from `<sensor>` or from an unambiguous
-//!   `<measurement>` name.
 //! - `<sensor>`: e.g. `bme280`, `bme680`, `scd41`, `sds011`, `ics43434`.
-//!   Optional when the (board, measurement) pair is unambiguous.
+//!   Optional when the measurement is unambiguous on the selected board.
 //! - `<measurement>`: the scalar field name (short aliases accepted, e.g.
 //!   `temp` for `temperature`).
 //! - GPS is a special case (three independent fields, not a oneof):
-//!   `[board/]gps=<lat>,<lon>,<height_m>` (positional, one line per fix).
+//!   `gps=<lat>,<lon>[,<height_m>]`.
 //!
 //! [`SignedEnvelope`]: crate::protocol::SignedEnvelope
 
@@ -62,38 +67,48 @@ use std::str::FromStr;
 #[derive(Debug, Args)]
 #[command(after_help = "\
 EXAMPLES:
-    # Encode one public measurement (board `urban` is inferred from the
-    # `bme280` sensor); wire bytes are written to stdout as binary.
-    echo 'bme280.temp=21.5' | edge message > message.bin
+    # Encode public measurements onto the `urban` board; wire bytes are
+    # written to stdout as binary.
+    edge message --board urban temp=21.5 humidity=44 > message.bin
 
     # Multiple public measurements across one message; short aliases (e.g.
-    # `temp`) and the positional GPS syntax are both supported.
-    printf 'bme280.temp=21.5\\nbme280.humidity=44\\nurban/gps=51.5,-0.12,35\\n' \\
-      | edge message --output hex
+    # `temp`) and the compact GPS syntax are both supported.
+    edge m -b urban temp=21.5 humidity=44 gps=51.5,-0.12,35 --output hex
+
+    # Ambiguous measurements on a board need an explicit sensor qualifier.
+    edge m -b insight bme680.temp=21.5 scd41.co2=800
 
     # A private measurement, encrypted for its recipient with the sender's
-    # key; private lines for the same recipient are grouped and encrypted
-    # together as a single ciphertext.
-    echo 'private:5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty/temp=21.5' \\
-      | edge message --suri 0xd6a1...seed... --output hex
+    # key; private measurements for the same recipient are grouped and
+    # encrypted together as a single ciphertext.
+    edge m -b urban private:5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty/temp=21.5 \\
+      --suri 0xd6a1...seed... --output hex
 
     # Decode a wire message (hex here) back into a human-readable debug dump.
-    edge message <0xdeadbeef.. --input hex --output text")]
+    edge message 0xdeadbeef.. --input hex --output text")]
 pub(crate) struct MessageArgs {
-    /// Message data. If omitted, reads from stdin. Decoded per `--input` (or
-    /// sniffed: hex/base64/binary wire bytes).
-    data: Option<String>,
-    /// Force the input representation (otherwise sniffed: line-grammar text
-    /// encodes, anything else decodes).
+    /// Compact measurements when encoding from argv (one per value, e.g.
+    /// `temp=21.5` or `bme680.co2=800`), or a single encoded DATA value with
+    /// an explicit `--input`. If no values are given, reads encoded data
+    /// from stdin instead.
+    #[arg(value_name = "MEASUREMENT")]
+    values: Vec<String>,
+    /// Device board for compact measurement encoding; required whenever
+    /// measurement values are given.
+    #[arg(short, long, value_enum)]
+    board: Option<BoardArg>,
+    /// Force the input representation of encoded DATA (otherwise sniffed:
+    /// hex/base64/binary wire bytes, or JSON). Not used for compact
+    /// measurement encoding.
     #[arg(short, long, value_enum)]
     input: Option<MessageFormat>,
     /// Force the output representation (otherwise: `text` when stdout is a
     /// terminal, `binary` otherwise).
     #[arg(short, long, value_enum)]
     output: Option<MessageFormat>,
-    /// Identity used for encryption: sender when the line grammar contains
-    /// `private:` entries (they are encrypted for their recipient), or
-    /// recipient with `--decrypt`. A Substrate SURI (a `0x`-prefixed hex
+    /// Identity used for encryption: sender when compact measurements
+    /// contain `private:` entries (they are encrypted for their recipient),
+    /// or recipient with `--decrypt`. A Substrate SURI (a `0x`-prefixed hex
     /// seed or a BIP-39 phrase, with optional derivation junctions).
     #[arg(short, long, value_name = "SURI")]
     suri: Option<String>,
@@ -117,7 +132,26 @@ pub(crate) struct MessageArgs {
     decrypt: bool,
 }
 
-/// Input/output representation for `edge message`.
+/// Device board — selects `Message.payload`. Command-level state for
+/// compact measurement encoding (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum BoardArg {
+    Urban,
+    Insight,
+}
+
+impl From<BoardArg> for compact::Board {
+    fn from(board: BoardArg) -> Self {
+        match board {
+            BoardArg::Urban => compact::Board::Urban,
+            BoardArg::Insight => compact::Board::Insight,
+        }
+    }
+}
+
+/// Input/output representation for `edge message`. This only covers actual
+/// data representations; compact measurements are CLI arguments, not an
+/// input serialization format (see [`compact`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum MessageFormat {
     /// Raw protobuf wire bytes.
@@ -129,34 +163,47 @@ enum MessageFormat {
     /// Human-readable pretty-printed debug rendering of the decoded
     /// protobuf struct (decode direction only).
     Text,
-    /// Compact line grammar (encode only; see module docs).
-    Grammar,
 }
 
 /// Dispatch `edge message`.
+///
+/// Three modes, selected structurally rather than by sniffing stdin bytes:
+///
+/// - one or more `values` with no `--input`: compact measurement argv mode
+///   (requires `--board`);
+/// - no `values`: read encoded/structured data from stdin (`--input`
+///   forced or sniffed);
+/// - one `values` entry with an explicit `--input`: treat it as encoded DATA
+///   rather than a measurement (decode/convert convenience).
 pub(crate) fn run(args: MessageArgs) -> CliResult {
-    let raw = match &args.data {
-        Some(text) => text.clone().into_bytes(),
-        None => format::read_stdin()?,
-    };
+    let wire = if args.input.is_none() && !args.values.is_empty() {
+        let board = args.board.ok_or_else(|| {
+            CliError::usage("`--board` is required to encode compact measurements")
+        })?;
+        let mut msg = compact::parse(board.into(), &args.values, args.suri.as_deref())?;
+        apply_owner(&mut msg, args.owner.as_deref())?;
+        protocol::encode_sensor_message(&msg)
+    } else {
+        let raw = match args.values.as_slice() {
+            [] => format::read_stdin()?,
+            [data] => data.clone().into_bytes(),
+            _ => {
+                return Err(CliError::usage(
+                    "at most one encoded DATA value is accepted with `--input`",
+                ))
+            }
+        };
 
-    let input = args.input.unwrap_or_else(|| sniff_input(&raw));
-
-    let wire = match input {
-        MessageFormat::Grammar => {
-            let text = std::str::from_utf8(&raw)
-                .map_err(|_| CliError::usage("grammar input must be valid UTF-8 text"))?;
-            let mut msg = grammar::parse(text, args.suri.as_deref())?;
-            apply_owner(&mut msg, args.owner.as_deref())?;
-            protocol::encode_sensor_message(&msg)
-        }
-        MessageFormat::Binary => raw.clone(),
-        MessageFormat::Base64 => format::wire_from_input(&raw, ByteFormat::Base64)?,
-        MessageFormat::Hex => format::wire_from_input(&raw, ByteFormat::Hex)?,
-        MessageFormat::Text => {
-            return Err(CliError::usage(
-                "--input text is not supported; provide wire bytes (hex/base64/binary) or the line grammar",
-            ))
+        let input = args.input.unwrap_or_else(|| sniff_input(&raw));
+        match input {
+            MessageFormat::Binary => raw,
+            MessageFormat::Base64 => format::wire_from_input(&raw, ByteFormat::Base64)?,
+            MessageFormat::Hex => format::wire_from_input(&raw, ByteFormat::Hex)?,
+            MessageFormat::Text => {
+                return Err(CliError::usage(
+                    "--input text is not supported; provide wire bytes (hex/base64/binary)",
+                ))
+            }
         }
     };
 
@@ -179,8 +226,9 @@ pub(crate) fn run(args: MessageArgs) -> CliResult {
 /// Default output representation when `--output` is not given: a
 /// human-readable debug rendering when stdout is a terminal, raw wire bytes
 /// otherwise (so pipelines keep working without needing `--output binary`).
-/// Applies whether the input was decoded (wire bytes) or just encoded (the
-/// line grammar): a fresh interactive `edge message` shows what was built.
+/// Applies whether the input was decoded (wire bytes) or just encoded
+/// (compact measurements): a fresh interactive `edge message` shows what was
+/// built.
 fn default_output() -> MessageFormat {
     if std::io::stdout().is_terminal() {
         MessageFormat::Text
@@ -189,19 +237,9 @@ fn default_output() -> MessageFormat {
     }
 }
 
-/// Sniff the [`MessageFormat`] of `raw`: the line grammar if it looks like
-/// `key=value` text, else wire bytes.
+/// Sniff the [`MessageFormat`] of encoded `raw` data (never compact
+/// measurements, which are dispatched separately by argv shape).
 fn sniff_input(raw: &[u8]) -> MessageFormat {
-    if let Ok(text) = std::str::from_utf8(raw) {
-        let looks_like_grammar = text
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .any(|l| l.contains('='));
-        if looks_like_grammar {
-            return MessageFormat::Grammar;
-        }
-    }
     match format::sniff_byte_format(raw) {
         ByteFormat::Binary => MessageFormat::Binary,
         ByteFormat::Base64 => MessageFormat::Base64,
@@ -229,9 +267,6 @@ fn write_output(wire: &[u8], format: MessageFormat, decrypt_suri: Option<&str>) 
             print_message(&msg, decrypt_suri);
             Ok(())
         }
-        MessageFormat::Grammar => Err(CliError::usage(
-            "`--output grammar` is not supported: the line grammar is encode-only",
-        )),
     }
 }
 
@@ -324,8 +359,10 @@ fn print_private_entry<M, S>(
         is_last && decrypted.is_none(),
         "E",
         format!(
-            "private: from=0x{} algorithm={}",
-            hex::encode(&entry.from),
+            "private: from={} algorithm={}",
+            SensorId::from_slice(&entry.from[..])
+                .expect("entry.from is 32 byte lenght")
+                .to_ss58(),
             entry.algorithm
         ),
     );
@@ -473,7 +510,7 @@ fn resolve_recipient(recipient: &str) -> Result<[u8; 32], CliError> {
 /// Decrypt one `private` entry's ciphertext with `suri` as the recipient's
 /// private key, then decode the resulting plaintext as `M` — the
 /// board-specific `EncryptedUrban`/`EncryptedInsight` protobuf wrapper
-/// declared alongside the encoder in [`grammar::encrypt_group`].
+/// declared alongside the encoder in [`compact::encrypt_group`].
 fn decrypt_entry<M: prost::Message + Default>(
     entry: &Encrypted,
     suri: &str,
@@ -515,27 +552,18 @@ fn decrypt_ciphertext(entry: &Encrypted, suri: &str) -> Result<Vec<u8>, CliError
 }
 
 // ---------------------------------------------------------------------------
-// Compact line grammar
+// Compact argv syntax
 // ---------------------------------------------------------------------------
 
-mod grammar {
+mod compact {
     use super::*;
 
-    /// Device board — selects `Message.payload`.
+    /// Device board — selects `Message.payload`. Command-level state: known
+    /// before any measurement is parsed (see the module docs).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Board {
+    pub(super) enum Board {
         Urban,
         Insight,
-    }
-
-    impl Board {
-        fn parse(s: &str) -> Option<Self> {
-            match s {
-                "urban" => Some(Self::Urban),
-                "insight" => Some(Self::Insight),
-                _ => None,
-            }
-        }
     }
 
     /// Sensor kind — the source device for a measurement.
@@ -562,7 +590,6 @@ mod grammar {
     impl SensorKind {
         fn parse(s: &str) -> Option<Self> {
             match s {
-                "gps" => Some(Self::Gps),
                 "bme280" => Some(Self::Bme280),
                 "bme680" => Some(Self::Bme680),
                 "scd41" => Some(Self::Scd41),
@@ -572,13 +599,13 @@ mod grammar {
             }
         }
 
-        /// The fixed board for this sensor, or `None` for `Gps` (valid on
-        /// both boards).
-        fn board(self) -> Option<Board> {
+        /// The board this sensor belongs to (fixed; `Gps` is valid on both
+        /// boards and never reaches this method).
+        fn board(self) -> Board {
             match self {
-                Self::Bme280 | Self::Sds011 | Self::Ics43434 => Some(Board::Urban),
-                Self::Bme680 | Self::Scd41 => Some(Board::Insight),
-                Self::Gps => None,
+                Self::Bme280 | Self::Sds011 | Self::Ics43434 => Board::Urban,
+                Self::Bme680 | Self::Scd41 => Board::Insight,
+                Self::Gps => unreachable!("Gps has no fixed board"),
             }
         }
 
@@ -602,44 +629,31 @@ mod grammar {
         }
     }
 
-    /// A single resolved value carried by a grammar line.
+    /// A single resolved value carried by a compact measurement item.
     enum Value {
         Measurement { name: &'static str, value: f64 },
         Gps { lat: f64, lon: f64, height_m: f64 },
     }
 
-    /// One fully-resolved grammar line.
-    struct Line {
+    /// One fully-resolved compact measurement item.
+    struct Item {
         recipient: Option<String>,
-        board: Board,
         kind: SensorKind,
         value: Value,
     }
 
-    /// Parse the full grammar text into a `core.v1.Message`.
+    /// Parse `values` (one compact measurement item per argv value) for
+    /// `board` into a `core.v1.Message`.
     ///
-    /// `suri` is required (and used) only if the text contains any
-    /// `private:` lines.
-    pub(super) fn parse(text: &str, suri: Option<&str>) -> Result<Message, CliError> {
-        let mut lines = Vec::new();
-        for (n, raw_line) in text.lines().enumerate() {
-            let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            lines.push(
-                parse_line(line).map_err(|e| CliError::usage(format!("line {}: {e}", n + 1)))?,
-            );
-        }
-        if lines.is_empty() {
+    /// `suri` is required (and used) only if `values` contains any
+    /// `private:` items.
+    pub(super) fn parse(
+        board: Board,
+        values: &[String],
+        suri: Option<&str>,
+    ) -> Result<Message, CliError> {
+        if values.is_empty() {
             return Err(CliError::usage("no measurements provided"));
-        }
-
-        let board = lines[0].board;
-        if lines.iter().any(|l| l.board != board) {
-            return Err(CliError::usage(
-                "all lines must resolve to the same board (urban/insight); got a mix",
-            ));
         }
 
         let mut public_urban = Vec::new();
@@ -648,18 +662,21 @@ mod grammar {
         let mut private_urban: Vec<(String, Vec<UrbanSensor>)> = Vec::new();
         let mut private_insight: Vec<(String, Vec<InsightSensor>)> = Vec::new();
 
-        for line in lines {
-            match (line.recipient, board) {
-                (None, Board::Urban) => public_urban.push(build_urban(line.kind, &line.value)?),
+        for raw in values {
+            let item = parse_item(board, raw)
+                .map_err(|e| CliError::usage(format!("invalid measurement `{raw}`: {e}")))?;
+
+            match (item.recipient, board) {
+                (None, Board::Urban) => public_urban.push(build_urban(item.kind, &item.value)?),
                 (None, Board::Insight) => {
-                    public_insight.push(build_insight(line.kind, &line.value)?)
+                    public_insight.push(build_insight(item.kind, &item.value)?)
                 }
                 (Some(recipient), Board::Urban) => {
-                    let entry = build_urban(line.kind, &line.value)?;
+                    let entry = build_urban(item.kind, &item.value)?;
                     group_push(&mut private_urban, recipient, entry);
                 }
                 (Some(recipient), Board::Insight) => {
-                    let entry = build_insight(line.kind, &line.value)?;
+                    let entry = build_insight(item.kind, &item.value)?;
                     group_push(&mut private_insight, recipient, entry);
                 }
             }
@@ -894,60 +911,47 @@ mod grammar {
         })
     }
 
-    /// Parse one non-empty, non-comment grammar line.
-    fn parse_line(line: &str) -> Result<Line, String> {
-        let (lhs, value_text) = line
+    /// Parse one compact measurement argv item:
+    ///
+    /// ```text
+    /// [<sensor>.]<measurement>=<value>
+    /// private:<recipient>/[<sensor>.]<measurement>=<value>
+    /// gps=<lat>,<lon>[,<height_m>]
+    /// private:<recipient>/gps=<lat>,<lon>[,<height_m>]
+    /// ```
+    fn parse_item(board: Board, raw: &str) -> Result<Item, String> {
+        let (lhs, value_text) = raw
             .split_once('=')
-            .ok_or_else(|| "expected `<...>=<value>`".to_string())?;
+            .ok_or_else(|| "expected `<measurement>=<value>`".to_string())?;
 
-        let (is_private, rest) = match lhs.split_once(':') {
-            Some(("public", rest)) => (false, rest),
-            Some(("private", rest)) => (true, rest),
-            Some((other, _)) => return Err(format!("unknown section `{other}`")),
-            None => (false, lhs),
-        };
-
-        let mut parts: Vec<&str> = rest.split('/').collect();
-        let tag = parts.pop().ok_or_else(|| "empty line".to_string())?;
-
-        let recipient = if is_private {
-            if parts.is_empty() {
-                return Err("`private:` requires a recipient".to_string());
-            }
-            Some(parts.remove(0).to_string())
+        let (recipient, tag) = if let Some(rest) = lhs.strip_prefix("private:") {
+            let (recipient, tag) = rest
+                .split_once('/')
+                .ok_or_else(|| "`private:` requires `<recipient>/<measurement>`".to_string())?;
+            (Some(recipient.to_string()), tag)
         } else {
-            None
+            (None, lhs)
         };
 
-        let mut board_hint = None;
-        if let Some(b) = parts.first() {
-            board_hint = Some(
-                Board::parse(b)
-                    .ok_or_else(|| format!("unknown board `{b}` (want urban/insight)"))?,
-            );
-            parts.remove(0);
-        }
-        if !parts.is_empty() {
-            return Err("too many `/`-separated segments".to_string());
-        }
-
-        // GPS positional special-case: bare `gps=<lat>,<lon>,<height_m>`.
+        // GPS positional special-case: bare `gps=<lat>,<lon>[,<height_m>]`.
         if tag == "gps" {
-            let board = board_hint
-                .ok_or_else(|| "`gps` requires an explicit board (urban/insight)".to_string())?;
-            let coords: Vec<&str> = value_text.split(',').map(str::trim).collect();
-            let (lat, lon, height_m) = match coords.as_slice() {
-                [lat, lon] => (*lat, *lon, "0"),
-                [lat, lon, height_m] => (*lat, *lon, *height_m),
-                _ => return Err("`gps` expects `lat,lon[,height_m]`".to_string()),
-            };
+            let mut coords = value_text.split(',').map(str::trim);
+            let lat = coords
+                .next()
+                .ok_or_else(|| "`gps` expects `lat,lon[,height_m]`".to_string())?;
+            let lon = coords
+                .next()
+                .ok_or_else(|| "`gps` expects `lat,lon[,height_m]`".to_string())?;
+            let height_m = coords.next().unwrap_or("0");
+            if coords.next().is_some() {
+                return Err("`gps` expects `lat,lon[,height_m]`".to_string());
+            }
             let parse_f64 = |s: &str| {
                 s.parse::<f64>()
                     .map_err(|e| format!("invalid gps coordinate `{s}`: {e}"))
             };
-            return Ok(Line {
+            return Ok(Item {
                 recipient,
-                board,
                 kind: SensorKind::Gps,
                 value: Value::Gps {
                     lat: parse_f64(lat)?,
@@ -970,11 +974,21 @@ mod grammar {
             .parse()
             .map_err(|e| format!("invalid value `{value_text}`: {e}"))?;
 
+        if let Some(hint) = sensor_hint {
+            if hint.board() != board {
+                return Err(format!(
+                    "sensor `{}` does not belong to the {} board",
+                    tag.split_once('.').map(|(s, _)| s).unwrap_or(""),
+                    board_name(board)
+                ));
+            }
+        }
+
         let candidates: Vec<SensorKind> = SCALAR_SENSORS
             .iter()
             .copied()
+            .filter(|k| k.board() == board)
             .filter(|k| sensor_hint.is_none_or(|h| h == *k))
-            .filter(|k| board_hint.is_none_or(|b| k.board() == Some(b)))
             .filter(|k| k.measurements().contains(&measurement))
             .collect();
 
@@ -982,29 +996,49 @@ mod grammar {
             [k] => *k,
             [] => {
                 return Err(format!(
-                    "no sensor produces measurement `{measurement}` for the given board/sensor"
+                    "no sensor produces measurement `{measurement}` on the {} board",
+                    board_name(board)
                 ))
             }
-            _ => {
+            many => {
+                let sensors = many
+                    .iter()
+                    .map(|k| format!("`{}.{measurement}`", sensor_name(*k)))
+                    .collect::<Vec<_>>()
+                    .join(" or ");
                 return Err(format!(
-                    "ambiguous measurement `{measurement}`: specify a board or sensor"
-                ))
+                    "ambiguous measurement `{measurement}` on {} board; specify {sensors}",
+                    board_name(board)
+                ));
             }
         };
-        let board = kind
-            .board()
-            .or(board_hint)
-            .ok_or_else(|| "ambiguous board: specify urban or insight".to_string())?;
 
-        Ok(Line {
+        Ok(Item {
             recipient,
-            board,
             kind,
             value: Value::Measurement {
                 name: measurement_static(measurement),
                 value,
             },
         })
+    }
+
+    fn board_name(board: Board) -> &'static str {
+        match board {
+            Board::Urban => "urban",
+            Board::Insight => "insight",
+        }
+    }
+
+    fn sensor_name(kind: SensorKind) -> &'static str {
+        match kind {
+            SensorKind::Gps => "gps",
+            SensorKind::Bme280 => "bme280",
+            SensorKind::Bme680 => "bme680",
+            SensorKind::Scd41 => "scd41",
+            SensorKind::Sds011 => "sds011",
+            SensorKind::Ics43434 => "ics43434",
+        }
     }
 
     /// Recover a `'static` measurement name from its canonical string (all
@@ -1073,10 +1107,20 @@ mod tests {
         assert_eq!(msg, decoded);
     }
 
+    /// Helper: build the `values` slice `compact::parse` expects from plain
+    /// string literals.
+    fn values(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
     #[test]
-    fn grammar_public_measurement_with_alias() {
-        let text = "bme280.temp=21.5\nurban/gps=55.75,37.61,150\n";
-        let msg = grammar::parse(text, None).unwrap();
+    fn compact_urban_measurement_with_alias_and_gps() {
+        let msg = compact::parse(
+            compact::Board::Urban,
+            &values(&["bme280.temp=21.5", "gps=55.75,37.61,150"]),
+            None,
+        )
+        .unwrap();
         match msg.payload.unwrap() {
             Payload::Urban(urban) => assert_eq!(urban.public.len(), 2),
             _ => panic!("expected urban payload"),
@@ -1084,8 +1128,34 @@ mod tests {
     }
 
     #[test]
-    fn grammar_infers_insight_board_from_measurement() {
-        let msg = grammar::parse("co2=800\n", None).unwrap();
+    fn compact_urban_unambiguous_temp_resolves_to_bme280() {
+        let msg = compact::parse(compact::Board::Urban, &values(&["temp=20"]), None).unwrap();
+        match msg.payload.unwrap() {
+            Payload::Urban(urban) => {
+                assert_eq!(urban.public.len(), 1);
+                match urban.public[0].sensor {
+                    Some(crate::protocol::generated::device::v1::urban_sensor::Sensor::Bme280(
+                        _,
+                    )) => {}
+                    _ => panic!("expected bme280"),
+                }
+            }
+            _ => panic!("expected urban payload"),
+        }
+    }
+
+    #[test]
+    fn compact_urban_pm25_resolves_to_sds011() {
+        let msg = compact::parse(compact::Board::Urban, &values(&["pm25=12"]), None).unwrap();
+        match msg.payload.unwrap() {
+            Payload::Urban(urban) => assert_eq!(urban.public.len(), 1),
+            _ => panic!("expected urban payload"),
+        }
+    }
+
+    #[test]
+    fn compact_insight_co2_resolves_to_scd41() {
+        let msg = compact::parse(compact::Board::Insight, &values(&["co2=800"]), None).unwrap();
         match msg.payload.unwrap() {
             Payload::Insight(insight) => assert_eq!(insight.public.len(), 1),
             _ => panic!("expected insight payload"),
@@ -1093,23 +1163,53 @@ mod tests {
     }
 
     #[test]
-    fn grammar_rejects_mixed_boards() {
-        let text = "urban/bme280.temp=21.5\ninsight/bme680.temp=22.0\n";
-        let err = grammar::parse(text, None).unwrap_err();
-        assert!(err.message.contains("same board"), "{}", err.message);
+    fn compact_insight_ambiguous_temp_requires_sensor_qualifier() {
+        let err =
+            compact::parse(compact::Board::Insight, &values(&["temp=21.5"]), None).unwrap_err();
+        assert!(
+            err.message.contains("ambiguous measurement"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("bme680.temp"), "{}", err.message);
+        assert!(err.message.contains("scd41.temp"), "{}", err.message);
     }
 
     #[test]
-    fn grammar_private_without_suri_is_usage_error() {
-        let text =
-            "private:5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM/urban/bme280.temp=21.5\n";
-        let err = grammar::parse(text, None).unwrap_err();
+    fn compact_insight_qualified_sensors_disambiguate() {
+        let msg = compact::parse(
+            compact::Board::Insight,
+            &values(&["bme680.temp=21.5", "scd41.co2=800"]),
+            None,
+        )
+        .unwrap();
+        match msg.payload.unwrap() {
+            Payload::Insight(insight) => assert_eq!(insight.public.len(), 2),
+            _ => panic!("expected insight payload"),
+        }
+    }
+
+    #[test]
+    fn compact_sensor_incompatible_with_board_is_rejected() {
+        let err =
+            compact::parse(compact::Board::Urban, &values(&["scd41.co2=800"]), None).unwrap_err();
+        assert!(err.message.contains("does not belong"), "{}", err.message);
+    }
+
+    #[test]
+    fn compact_private_without_suri_is_usage_error() {
+        let err = compact::parse(
+            compact::Board::Urban,
+            &values(&["private:5C4hrfjw9DjXZTzV3MwzrrAr9P1MJhSrvWGWqi1eSuyUpnhM/bme280.temp=21.5"]),
+            None,
+        )
+        .unwrap_err();
         assert_eq!(err.code, 2);
     }
 
     /// End-to-end: encrypt a private measurement for a recipient (via the
-    /// line grammar), round-trip it through the wire encoding, then decrypt
-    /// it back with [`decrypt_entry`] — mirroring what
+    /// compact argv syntax), round-trip it through the wire encoding, then
+    /// decrypt it back with [`decrypt_entry`] — mirroring what
     /// `edge message --decrypt --suri <SURI>` does.
     #[test]
     fn private_section_roundtrips_through_decrypt() {
@@ -1118,8 +1218,13 @@ mod tests {
         let recipient_suri = recipient.secret_to_hex();
         let recipient_ss58 = recipient.sensor_id().to_ss58();
 
-        let text = format!("private:{recipient_ss58}/bme280.temp=21.5\n");
-        let msg = grammar::parse(&text, Some(&sender.secret_to_hex())).unwrap();
+        let item = format!("private:{recipient_ss58}/bme280.temp=21.5");
+        let msg = compact::parse(
+            compact::Board::Urban,
+            &values(&[&item]),
+            Some(&sender.secret_to_hex()),
+        )
+        .unwrap();
 
         // The private section is genuinely encrypted: no plaintext leaks
         // into the wire bytes.

@@ -54,15 +54,6 @@ pub(crate) enum ReprFormat {
     Text,
 }
 
-/// Rendering for report-style output (`key generate`/`inspect`/`verify`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum ReportFormat {
-    /// Human-readable text.
-    Text,
-    /// Machine-readable JSON.
-    Json,
-}
-
 /// Read all bytes from `stdin`.
 pub(crate) fn read_stdin() -> Result<Vec<u8>, CliError> {
     let mut buf = Vec::new();

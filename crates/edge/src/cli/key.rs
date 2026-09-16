@@ -26,7 +26,6 @@
 //! Signing and verification of envelopes live under `edge envelope`; this
 //! command is purely about identity material.
 
-use super::format::ReportFormat;
 use super::{CliError, CliResult};
 use crate::protocol::{SensorId, SensorIdentity};
 use clap::Subcommand;
@@ -35,38 +34,27 @@ use clap::Subcommand;
 #[derive(Debug, Subcommand)]
 pub(crate) enum KeyCommand {
     /// Generate a new random Ed25519 sensor identity.
-    Generate {
-        /// Report rendering.
-        #[arg(short, long, value_enum, default_value_t = ReportFormat::Text)]
-        output: ReportFormat,
-    },
+    Generate,
     /// Inspect a Key URI, reporting its public identity (subkey-style).
     Inspect {
         /// A Key URI to be inspected: an SS58 address (public-only) or a
         /// mandatory `0x`-prefixed 32-byte hex secret seed.
         uri: String,
-        /// Report rendering.
-        #[arg(short, long, value_enum, default_value_t = ReportFormat::Text)]
-        output: ReportFormat,
     },
 }
 
 /// Dispatch a `key` subcommand.
 pub(crate) fn run(command: KeyCommand) -> CliResult {
     match command {
-        KeyCommand::Generate { output } => generate(output),
-        KeyCommand::Inspect { uri, output } => inspect(uri, output),
+        KeyCommand::Generate => generate(),
+        KeyCommand::Inspect { uri } => inspect(uri),
     }
 }
 
 /// Implements `edge key generate`.
-fn generate(output: ReportFormat) -> CliResult {
+fn generate() -> CliResult {
     let identity = SensorIdentity::generate();
-    report(
-        Some(identity.secret_to_hex()),
-        &identity.sensor_id(),
-        output,
-    )
+    report(Some(identity.secret_to_hex()), &identity.sensor_id())
 }
 
 /// Implements `edge key inspect`.
@@ -74,12 +62,12 @@ fn generate(output: ReportFormat) -> CliResult {
 /// Following `subkey`, the URI may be a public SS58 address (reported without a
 /// secret) or a `0x`-prefixed 32-byte hex secret seed (reported with its
 /// derived public key).
-fn inspect(uri: String, output: ReportFormat) -> CliResult {
+fn inspect(uri: String) -> CliResult {
     let uri = uri.trim();
 
     // An SS58 address yields a public-only report (no secret is recoverable).
     if let Ok(sensor_id) = SensorId::from_ss58(uri) {
-        return report(None, &sensor_id, output);
+        return report(None, &sensor_id);
     }
 
     // Otherwise interpret the URI as a Substrate SURI: a mandatory
@@ -90,41 +78,23 @@ fn inspect(uri: String, output: ReportFormat) -> CliResult {
             "invalid key URI: expected an SS58 address or a valid SURI: {e}"
         ))
     })?;
-    report(
-        Some(identity.secret_to_hex()),
-        &identity.sensor_id(),
-        output,
-    )
+    report(Some(identity.secret_to_hex()), &identity.sensor_id())
 }
 
 /// Render a sensor identity in the `subkey`-style key report.
 ///
 /// The `secret_hex` is only present when the caller holds the private key (i.e.
 /// not when inspecting a public SS58 address).
-fn report(secret_hex: Option<String>, sensor_id: &SensorId, output: ReportFormat) -> CliResult {
+fn report(secret_hex: Option<String>, sensor_id: &SensorId) -> CliResult {
     let public_hex = sensor_id.to_hex();
     let ss58 = sensor_id.to_ss58();
 
-    match output {
-        ReportFormat::Text => {
-            if let Some(secret) = &secret_hex {
-                println!("Secret seed:  {secret}");
-            }
-            println!("Public key:   {public_hex}");
-            println!("SS58 Address: {ss58}");
-        }
-        ReportFormat::Json => {
-            let mut map = serde_json::Map::new();
-            if let Some(secret) = &secret_hex {
-                map.insert("secretSeed".into(), serde_json::json!(secret));
-            }
-            map.insert("publicKey".into(), serde_json::json!(public_hex));
-            map.insert("ss58Address".into(), serde_json::json!(ss58));
-            let json = serde_json::to_string_pretty(&serde_json::Value::Object(map))
-                .map_err(|e| CliError::runtime(format!("failed to serialize JSON: {e}")))?;
-            println!("{json}");
-        }
+    if let Some(secret) = &secret_hex {
+        println!("Secret seed:  {secret}");
     }
+    println!("Public key:   {public_hex}");
+    println!("SS58 Address: {ss58}");
+
     Ok(())
 }
 

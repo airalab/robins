@@ -40,31 +40,23 @@ Public key:   0xedefe5b07e2c03b97f72748ef532d39fa2c724175216ac5a3c6d40cb7766b631
 SS58 Address: 4Ha5tJacMSV2xSK5VvQ2naWP63EAFq1bD7HgNEdWJ9LYhj3U
 ```
 
-### 2. Compose telemetry with the line grammar and sign it
+### 2. Compose telemetry with compact argv measurements and sign it
 
-`edge message` turns a compact, human-typable grammar into a protobuf
+`edge message` turns compact measurement arguments straight into a protobuf
 payload — no schemas to hand-write:
 
 ```console
-$ printf 'bme280.temp=21.5\nbme280.humidity=44\nurban/gps=51.5,-0.12,35\n' \
-    | edge message --output json
-{
-  "owner": "",
-  "urban": {
-    "public": [
-      { "bme280": { "temperature": 21.5 } },
-      { "bme280": { "humidity": 44.0 } },
-      { "gps": { "lat": 51.5, "lon": -0.12, "height_m": 35.0 } }
-    ],
-    "private": []
-  }
-}
+$ edge message --board urban temp=21.5 humidity=44 gps=51.5,-0.12,35
+[M] Message
+    |-- [S] public:  bme280 temperature=21.50°C
+    |-- [S] public:  bme280 humidity=44.00%
+    `-- [S] public:  gps lat=51.50000 lon=-0.12000 height_m=35.0
 ```
 
 Sign it into a wire-ready `SignedEnvelope` with the identity from step 1:
 
 ```console
-$ printf 'bme280.temp=21.5\nbme280.humidity=44\n' | edge message > msg.bin
+$ edge message --board urban temp=21.5 humidity=44 > msg.bin
 $ edge envelope --sign 0x4023...seed... --input binary < msg.bin > env.bin
 ```
 
@@ -111,14 +103,14 @@ one binary.
 | `edge gateway`           | `g`   | Run the long-running ingress daemon.                   |
 | `edge key generate`      | `k`   | Mint a fresh Ed25519 sensor identity (subkey-style).    |
 | `edge key inspect <uri>` | `k`   | Report the public identity for a seed or SS58 address.  |
-| `edge message`           | `m`   | Encode (grammar/JSON) or decode a telemetry payload.    |
+| `edge message`           | `m`   | Encode (compact argv) or decode a telemetry payload.   |
 | `edge envelope`          | `e`   | Sign, verify, encode or decode a `SignedEnvelope`.      |
 | `edge config generate`   | `c`   | Emit a validated default `gateway.toml`.                |
 | `edge config check`      | `c`   | Validate a configuration file.                          |
 
 Every encode/decode command auto-detects its direction and byte format
-(JSON/hex/base64/binary), so `edge envelope 0xaabb...` and
-`cat file.bin | edge envelope --output json` both just work.
+(hex/base64/binary), so `edge envelope 0xaabb...` and
+`cat file.bin | edge envelope --output hex` both just work.
 
 ## Operations endpoints
 
