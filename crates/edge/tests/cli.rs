@@ -66,8 +66,6 @@ fn sign_verify_id_pipeline() {
             "envelope",
             "--sign",
             KEY_HEX,
-            "--timestamp",
-            "1700000000000",
             "--nonce",
             "0x00112233445566778899aabbccddeeff",
             "--input",

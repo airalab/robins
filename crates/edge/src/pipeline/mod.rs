@@ -340,12 +340,11 @@ mod tests {
     #[tokio::test]
     async fn duplicate_message_is_delivered_once() {
         let identity = SensorIdentity::from_secret_bytes(&[5u8; 32]);
-        // Same envelope bytes twice (fixed timestamp + nonce -> identical id).
+        // Same envelope bytes twice (fixed nonce -> identical id).
         let envelope = sign_message(
             &identity,
             b"dup",
             SignOptions {
-                timestamp_ms: Some(1_700_000_000_000),
                 nonce: Some(vec![7u8; 16]),
             },
         );
@@ -371,7 +370,6 @@ mod tests {
             &identity,
             b"multi",
             SignOptions {
-                timestamp_ms: Some(1_700_000_000_001),
                 nonce: Some(vec![8u8; 16]),
             },
         );

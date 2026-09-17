@@ -11872,9 +11872,9 @@ dependencies = [
 
 [[package]]
 name = "robonomics-chain-spec"
-version = "50.0.0"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1176a530eff16f502f4d16913666487697cc5cfedf8065bd839c35bb90edc3c"
+checksum = "0d1291641ec3f2b9ebf26cbba4fd866a20d566e46c54fdbcc75edbd90ceefa72"
 
 [[package]]
 name = "robonomics-collator-rewards"

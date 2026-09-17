@@ -55,21 +55,17 @@ pub struct SignedEnvelope {
     /// Used as unique device identifier.
     #[prost(bytes = "vec", tag = "1")]
     pub sensor_id: ::prost::alloc::vec::Vec<u8>,
-    /// Unix timestamp in milliseconds (UTC).
-    /// When the measurement was taken.
-    #[prost(uint64, tag = "2")]
-    pub timestamp: u64,
     /// Random nonce to prevent replay attacks (16-32 bytes recommended).
     /// Should be unique for each request (e.g., random bytes or UUID bytes).
-    #[prost(bytes = "vec", tag = "3")]
+    #[prost(bytes = "vec", tag = "2")]
     pub nonce: ::prost::alloc::vec::Vec<u8>,
     /// The actual telemetry as raw protobuf bytes.
     /// Connectivity layer can pass this through without decoding.
-    #[prost(bytes = "vec", tag = "4")]
+    #[prost(bytes = "vec", tag = "3")]
     pub message: ::prost::alloc::vec::Vec<u8>,
     /// Measurement signature (for Ed25519 it's 64 bytes).
-    /// Signs: sensor_id + timestamp + nonce + message.
-    #[prost(bytes = "vec", tag = "5")]
+    /// Signs: sensor_id + nonce + message.
+    #[prost(bytes = "vec", tag = "4")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
 }
 /// A batch of telemetry messages.

@@ -77,10 +77,6 @@ pub(crate) struct EnvelopeArgs {
     /// junctions), producing a fresh `SignedEnvelope` instead of parsing one.
     #[arg(long, value_name = "SURI")]
     sign: Option<String>,
-    /// Measurement timestamp in Unix milliseconds, used with `--sign`
-    /// (defaults to now).
-    #[arg(long, requires = "sign")]
-    timestamp: Option<u64>,
     /// Anti-replay nonce as `0x`-prefixed hex, used with `--sign` (defaults to
     /// a fresh random value).
     #[arg(long, requires = "sign")]
@@ -169,10 +165,7 @@ fn sign(suri: &str, args: &EnvelopeArgs) -> Result<(SignedEnvelope, Vec<u8>), Cl
         }),
         None => None,
     };
-    let options = SignOptions {
-        timestamp_ms: args.timestamp,
-        nonce,
-    };
+    let options = SignOptions { nonce };
     let env = protocol::sign_message(&identity, &message, options);
     let wire = protocol::encode_envelope(&env);
     Ok((env, wire))
@@ -222,7 +215,6 @@ fn write_repr(env: &SignedEnvelope, wire: &[u8], format: ReprFormat) -> CliResul
                 "#",
                 format!("sensor_id:  0x{}", hex::encode(&env.sensor_id)),
             );
-            format::line(0, false, "T", format!("timestamp:  {}", env.timestamp));
             format::line(
                 0,
                 false,

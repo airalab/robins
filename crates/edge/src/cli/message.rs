@@ -112,10 +112,16 @@ pub(crate) struct MessageArgs {
     /// seed or a BIP-39 phrase, with optional derivation junctions).
     #[arg(short, long, value_name = "SURI")]
     suri: Option<String>,
-    /// Sensor owner public key (SS58 or `0x`-prefixed hex) to set on the
-    /// encoded message's `metadata.owner` field. Unset (no owner) by default.
-    #[arg(long, value_name = "ADDRESS")]
-    owner: Option<String>,
+    /// Robonomics CPS node identifier to set on the encoded message's
+    /// `metadata.node_id` field (the canonical reference to the telemetry
+    /// source; ownership/other node metadata are resolved via the CPS
+    /// registry from this id). Defaults to `0` (unset) when not given.
+    #[arg(long, value_name = "NODE_ID")]
+    node_id: Option<u64>,
+    /// Measurement timestamp in Unix milliseconds (UTC) to set on the
+    /// encoded message's `metadata.timestamp` field. Defaults to now.
+    #[arg(long, value_name = "TIMESTAMP")]
+    timestamp: Option<u64>,
     /// Print the message's dedup id (SHA-256 of the encoded wire bytes) to
     /// stderr as `message_id: <hex>`. Diagnostics only; stdout stays a clean
     /// data stream.
@@ -178,7 +184,7 @@ enum MessageFormat {
 pub(crate) fn run(args: MessageArgs) -> CliResult {
     let wire = if args.input.is_none() && !args.values.is_empty() {
         let mut msg = compact::parse(args.board.into(), &args.values, args.suri.as_deref())?;
-        apply_owner(&mut msg, args.owner.as_deref())?;
+        apply_meta(&mut msg, args.node_id, args.timestamp);
         protocol::encode_sensor_message(&msg)
     } else {
         let raw = match args.values.as_slice() {
@@ -275,13 +281,9 @@ fn write_output(wire: &[u8], format: MessageFormat, decrypt_suri: Option<&str>) 
 /// stderr rather than aborting the whole command.
 fn print_message(msg: &Message, decrypt_suri: Option<&str>) {
     format::heading("M", "Message");
-    if let Some(owner) = msg
-        .metadata
-        .as_ref()
-        .map(|m| &m.owner)
-        .filter(|o| !o.is_empty())
-    {
-        format::line(0, false, "O", format!("owner: 0x{}", hex::encode(owner)));
+    if let Some(meta) = msg.metadata.as_ref() {
+        format::line(0, false, "#", format!("node_id:   {}", meta.node_id));
+        format::line(0, false, "T", format!("timestamp: {}", meta.timestamp));
     }
     match msg.payload.as_ref() {
         Some(Payload::Urban(urban)) => print_urban(urban, decrypt_suri),
@@ -438,9 +440,13 @@ fn format_gps(g: &Gps) -> String {
 fn format_bme280(b: &Bme280) -> String {
     use crate::protocol::generated::sensor::v1::bme280::Measurement;
     match b.measurement.as_ref() {
-        Some(Measurement::Temperature(t)) => format!("temperature={:.2}°C", t.celsius),
-        Some(Measurement::Humidity(h)) => format!("humidity={:.2}%", h.percent),
-        Some(Measurement::Pressure(p)) => format!("pressure={:.2}Pa", p.pascal),
+        Some(Measurement::Temperature(t)) => {
+            format!("temperature={:.2}°C", centi_to_f64(t.centi_celsius))
+        }
+        Some(Measurement::Humidity(h)) => {
+            format!("humidity={:.2}%", centiu_to_f64(h.centi_percent))
+        }
+        Some(Measurement::Pressure(p)) => format!("pressure={:.2}Pa", deci_to_f64(p.deci_pascal)),
         None => "(unset)".to_string(),
     }
 }
@@ -448,9 +454,13 @@ fn format_bme280(b: &Bme280) -> String {
 fn format_bme680(b: &Bme680) -> String {
     use crate::protocol::generated::sensor::v1::bme680::Measurement;
     match b.measurement.as_ref() {
-        Some(Measurement::Temperature(t)) => format!("temperature={:.2}°C", t.celsius),
-        Some(Measurement::Humidity(h)) => format!("humidity={:.2}%", h.percent),
-        Some(Measurement::Pressure(p)) => format!("pressure={:.2}Pa", p.pascal),
+        Some(Measurement::Temperature(t)) => {
+            format!("temperature={:.2}°C", centi_to_f64(t.centi_celsius))
+        }
+        Some(Measurement::Humidity(h)) => {
+            format!("humidity={:.2}%", centiu_to_f64(h.centi_percent))
+        }
+        Some(Measurement::Pressure(p)) => format!("pressure={:.2}Pa", deci_to_f64(p.deci_pascal)),
         None => "(unset)".to_string(),
     }
 }
@@ -458,9 +468,13 @@ fn format_bme680(b: &Bme680) -> String {
 fn format_scd41(s: &Scd41) -> String {
     use crate::protocol::generated::sensor::v1::scd41::Measurement;
     match s.measurement.as_ref() {
-        Some(Measurement::Co2(c)) => format!("co2={:.0}ppm", c.ppm),
-        Some(Measurement::Temperature(t)) => format!("temperature={:.2}°C", t.celsius),
-        Some(Measurement::Humidity(h)) => format!("humidity={:.2}%", h.percent),
+        Some(Measurement::Co2(c)) => format!("co2={}ppm", c.ppm),
+        Some(Measurement::Temperature(t)) => {
+            format!("temperature={:.2}°C", centi_to_f64(t.centi_celsius))
+        }
+        Some(Measurement::Humidity(h)) => {
+            format!("humidity={:.2}%", centiu_to_f64(h.centi_percent))
+        }
         None => "(unset)".to_string(),
     }
 }
@@ -468,8 +482,8 @@ fn format_scd41(s: &Scd41) -> String {
 fn format_sds011(s: &Sds011) -> String {
     use crate::protocol::generated::sensor::v1::sds011::Measurement;
     match s.measurement.as_ref() {
-        Some(Measurement::Pm25(p)) => format!("pm25={:.1}ug/m3", p.ug_m3),
-        Some(Measurement::Pm10(p)) => format!("pm10={:.1}ug/m3", p.ug_m3),
+        Some(Measurement::Pm25(p)) => format!("pm25={:.1}ug/m3", deci_to_f64(p.deci_ug_m3)),
+        Some(Measurement::Pm10(p)) => format!("pm10={:.1}ug/m3", deci_to_f64(p.deci_ug_m3)),
         None => "(unset)".to_string(),
     }
 }
@@ -477,22 +491,63 @@ fn format_sds011(s: &Sds011) -> String {
 fn format_ics43434(i: &Ics43434) -> String {
     use crate::protocol::generated::sensor::v1::ics43434::Measurement;
     match i.measurement.as_ref() {
-        Some(Measurement::NoiseMax(n)) => format!("noise_max={:.1}dB", n.db),
-        Some(Measurement::NoiseAvg(n)) => format!("noise_avg={:.1}dB", n.db),
+        Some(Measurement::NoiseMax(n)) => format!("noise_max={}dB", n.db),
+        Some(Measurement::NoiseAvg(n)) => format!("noise_avg={}dB", n.db),
         None => "(unset)".to_string(),
     }
 }
 
-/// Set `msg.metadata.owner` from `--owner`, if given (SS58 or `0x`-prefixed
-/// hex). Leaves `metadata` untouched (`None` by default) when `owner` is
-/// `None`.
-fn apply_owner(msg: &mut Message, owner: Option<&str>) -> Result<(), CliError> {
-    if let Some(owner) = owner {
-        msg.metadata = Some(Meta {
-            owner: resolve_recipient(owner)?.to_vec(),
-        });
-    }
-    Ok(())
+/// Scale a human-unit `f64` value into a signed 0.01-unit integer (e.g.
+/// °C → `centi_celsius`), rounding to the nearest integer.
+fn f64_to_centi(value: f64) -> i32 {
+    (value * 100.0).round() as i32
+}
+
+/// Inverse of [`f64_to_centi`].
+fn centi_to_f64(value: i32) -> f64 {
+    value as f64 / 100.0
+}
+
+/// Scale a human-unit `f64` value into an unsigned 0.01-unit integer (e.g.
+/// %RH → `centi_percent`), rounding to the nearest integer and clamping
+/// negative inputs to `0`.
+fn f64_to_centiu(value: f64) -> u32 {
+    (value * 100.0).round().max(0.0) as u32
+}
+
+/// Inverse of [`f64_to_centiu`].
+fn centiu_to_f64(value: u32) -> f64 {
+    value as f64 / 100.0
+}
+
+/// Scale a human-unit `f64` value into an unsigned 0.1-unit integer (e.g.
+/// Pa → `deci_pascal`, µg/m³ → `deci_ug_m3`), rounding to the nearest integer
+/// and clamping negative inputs to `0`.
+fn f64_to_deciu(value: f64) -> u32 {
+    (value * 10.0).round().max(0.0) as u32
+}
+
+/// Inverse of [`f64_to_deciu`].
+fn deci_to_f64(value: u32) -> f64 {
+    value as f64 / 10.0
+}
+
+/// Round a human-unit `f64` value into a whole-unit unsigned integer (e.g.
+/// ppm, dB), clamping negative inputs to `0`.
+fn f64_to_u32(value: f64) -> u32 {
+    value.round().max(0.0) as u32
+}
+
+/// Set `msg.metadata` from `--node-id`/`--timestamp`. `node_id` defaults to
+/// `0` (interpreted by the Connectivity Protocol as "unset") and `timestamp`
+/// defaults to now, so every encoded message carries the measurement time
+/// per Connectivity Protocol v1-beta.2 (`core.v1.Meta`), matching the old
+/// per-envelope timestamp default.
+fn apply_meta(msg: &mut Message, node_id: Option<u64>, timestamp: Option<u64>) {
+    msg.metadata = Some(Meta {
+        node_id: node_id.unwrap_or(0),
+        timestamp: timestamp.unwrap_or_else(protocol::now_unix_millis),
+    });
 }
 
 /// Resolve an SS58 or `0x`-prefixed hex-encoded recipient string to its raw
@@ -828,9 +883,15 @@ mod compact {
     fn bme280_measurement(name: &str, value: f64) -> Result<Bme280, CliError> {
         use crate::protocol::generated::sensor::v1::bme280::Measurement;
         let measurement = match name {
-            "temperature" => Measurement::Temperature(Temperature { celsius: value }),
-            "humidity" => Measurement::Humidity(Humidity { percent: value }),
-            "pressure" => Measurement::Pressure(Pressure { pascal: value }),
+            "temperature" => Measurement::Temperature(Temperature {
+                centi_celsius: f64_to_centi(value),
+            }),
+            "humidity" => Measurement::Humidity(Humidity {
+                centi_percent: f64_to_centiu(value),
+            }),
+            "pressure" => Measurement::Pressure(Pressure {
+                deci_pascal: f64_to_deciu(value),
+            }),
             other => {
                 return Err(CliError::usage(format!(
                     "bme280 has no measurement `{other}`"
@@ -845,9 +906,15 @@ mod compact {
     fn bme680_measurement(name: &str, value: f64) -> Result<Bme680, CliError> {
         use crate::protocol::generated::sensor::v1::bme680::Measurement;
         let measurement = match name {
-            "temperature" => Measurement::Temperature(Temperature { celsius: value }),
-            "humidity" => Measurement::Humidity(Humidity { percent: value }),
-            "pressure" => Measurement::Pressure(Pressure { pascal: value }),
+            "temperature" => Measurement::Temperature(Temperature {
+                centi_celsius: f64_to_centi(value),
+            }),
+            "humidity" => Measurement::Humidity(Humidity {
+                centi_percent: f64_to_centiu(value),
+            }),
+            "pressure" => Measurement::Pressure(Pressure {
+                deci_pascal: f64_to_deciu(value),
+            }),
             other => {
                 return Err(CliError::usage(format!(
                     "bme680 has no measurement `{other}`"
@@ -862,9 +929,15 @@ mod compact {
     fn scd41_measurement(name: &str, value: f64) -> Result<Scd41, CliError> {
         use crate::protocol::generated::sensor::v1::scd41::Measurement;
         let measurement = match name {
-            "co2" => Measurement::Co2(Co2 { ppm: value }),
-            "temperature" => Measurement::Temperature(Temperature { celsius: value }),
-            "humidity" => Measurement::Humidity(Humidity { percent: value }),
+            "co2" => Measurement::Co2(Co2 {
+                ppm: f64_to_u32(value),
+            }),
+            "temperature" => Measurement::Temperature(Temperature {
+                centi_celsius: f64_to_centi(value),
+            }),
+            "humidity" => Measurement::Humidity(Humidity {
+                centi_percent: f64_to_centiu(value),
+            }),
             other => {
                 return Err(CliError::usage(format!(
                     "scd41 has no measurement `{other}`"
@@ -879,8 +952,12 @@ mod compact {
     fn sds011_measurement(name: &str, value: f64) -> Result<Sds011, CliError> {
         use crate::protocol::generated::sensor::v1::sds011::Measurement;
         let measurement = match name {
-            "pm25" => Measurement::Pm25(Pm25 { ug_m3: value }),
-            "pm10" => Measurement::Pm10(Pm10 { ug_m3: value }),
+            "pm25" => Measurement::Pm25(Pm25 {
+                deci_ug_m3: f64_to_deciu(value),
+            }),
+            "pm10" => Measurement::Pm10(Pm10 {
+                deci_ug_m3: f64_to_deciu(value),
+            }),
             other => {
                 return Err(CliError::usage(format!(
                     "sds011 has no measurement `{other}`"
@@ -895,8 +972,12 @@ mod compact {
     fn ics43434_measurement(name: &str, value: f64) -> Result<Ics43434, CliError> {
         use crate::protocol::generated::sensor::v1::ics43434::Measurement;
         let measurement = match name {
-            "noise_max" => Measurement::NoiseMax(NoiseLevel { db: value }),
-            "noise_avg" => Measurement::NoiseAvg(NoiseLevel { db: value }),
+            "noise_max" => Measurement::NoiseMax(NoiseLevel {
+                db: f64_to_u32(value),
+            }),
+            "noise_avg" => Measurement::NoiseAvg(NoiseLevel {
+                db: f64_to_u32(value),
+            }),
             other => {
                 return Err(CliError::usage(format!(
                     "ics43434 has no measurement `{other}`"
@@ -1062,7 +1143,8 @@ mod tests {
     fn sample_urban() -> Message {
         Message {
             metadata: Some(Meta {
-                owner: vec![0xabu8; 32],
+                node_id: 42,
+                timestamp: 1_700_000_000_000,
             }),
             payload: Some(Payload::Urban(Urban {
                 public: vec![
@@ -1083,7 +1165,7 @@ mod tests {
                                 Bme280 {
                                     measurement: Some(
                                         crate::protocol::generated::sensor::v1::bme280::Measurement::Temperature(
-                                            Temperature { celsius: 21.5 },
+                                            Temperature { centi_celsius: 2150 },
                                         ),
                                     ),
                                 },
@@ -1246,10 +1328,10 @@ mod tests {
                 Bme280 {
                     measurement:
                         Some(crate::protocol::generated::sensor::v1::bme280::Measurement::Temperature(
-                            Temperature { celsius },
+                            Temperature { centi_celsius },
                         )),
                 },
-            )) => assert_eq!(celsius, 21.5),
+            )) => assert_eq!(centi_celsius, 2150),
             _ => panic!("expected decrypted bme280 temperature"),
         }
 

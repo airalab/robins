@@ -72,8 +72,8 @@ pub use generated::device::v1::{
     EncryptedInsight, EncryptedUrban, Insight, InsightSensor, Urban, UrbanSensor,
 };
 pub use generated::sensor::v1::{
-    AirQualityIndex, Bme280, Bme680, CarbonMonoxide, Co2, Gps, Humidity, Ics43434, NitrogenDioxide,
-    NoiseLevel, Ozone, Pm10, Pm25, Pressure, Radiation, Scd41, Sds011, Temperature,
+    Bme280, Bme680, Co2, Gps, Humidity, Ics43434, NoiseLevel, Pm10, Pm25, Pressure, Scd41, Sds011,
+    Temperature,
 };
 
 /// The root telemetry payload (`core.v1.Message`) carried inside a
@@ -304,11 +304,12 @@ pub struct VerifiedEnvelope {
 }
 
 /// Options controlling how [`sign_message`] constructs an envelope.
+///
+/// The measurement timestamp lives in `core.v1.Meta.timestamp` (part of the
+/// signed `message` bytes), not the envelope, so it isn't configured here —
+/// see `edge message --timestamp`.
 #[derive(Clone, Debug, Default)]
 pub struct SignOptions {
-    /// Explicit measurement timestamp (Unix milliseconds, UTC). Defaults to the
-    /// current wall-clock time when `None`.
-    pub timestamp_ms: Option<u64>,
     /// Explicit anti-replay nonce. A fresh [`DEFAULT_NONCE_LEN`]-byte random
     /// value is generated when `None`.
     pub nonce: Option<Vec<u8>>,
@@ -401,20 +402,20 @@ pub fn encode_sensor_message(message: &sensor_message::Message) -> Vec<u8> {
 
 /// Canonical byte string that the Ed25519 `signature` covers.
 ///
-/// Layout: `sensor_id || timestamp || nonce || message`, where `timestamp` is the
-/// `uint64` millisecond value encoded as 8 **little-endian** bytes.
+/// Layout: `sensor_id || nonce || message`. The measurement timestamp is no
+/// longer part of the envelope (Connectivity Protocol v1-beta.2); it now
+/// lives in `core.v1.Meta.timestamp`, inside the serialized `message` bytes,
+/// so it remains cryptographically covered without a dedicated field here.
 ///
 /// This matches the authoritative reference implementation in
 /// `airalab/connectivity-cloud` (`packages/core/src/utils.ts`,
-/// `buildEnvelopeSigningBytes` / `timestampToLeBytes` using
-/// `DataView.setBigUint64(0, timestamp, /* littleEndian */ true)`). It is the
-/// single place that defines the signed layout.
+/// `buildEnvelopeSigningBytes`). It is the single place that defines the
+/// signed layout.
 fn signing_payload(envelope: &SignedEnvelope) -> Vec<u8> {
     let mut buf = Vec::with_capacity(
-        envelope.sensor_id.len() + 8 + envelope.nonce.len() + envelope.message.len(),
+        envelope.sensor_id.len() + envelope.nonce.len() + envelope.message.len(),
     );
     buf.extend_from_slice(&envelope.sensor_id);
-    buf.extend_from_slice(&envelope.timestamp.to_le_bytes());
     buf.extend_from_slice(&envelope.nonce);
     buf.extend_from_slice(&envelope.message);
     buf
@@ -474,7 +475,6 @@ pub fn sign_message(
     message: &[u8],
     options: SignOptions,
 ) -> SignedEnvelope {
-    let timestamp = options.timestamp_ms.unwrap_or_else(now_unix_millis);
     let nonce = options.nonce.unwrap_or_else(|| {
         let mut n = vec![0u8; DEFAULT_NONCE_LEN];
         rand::rngs::OsRng.fill_bytes(&mut n);
@@ -483,7 +483,6 @@ pub fn sign_message(
 
     let mut envelope = SignedEnvelope {
         sensor_id: identity.sensor_id().as_bytes().to_vec(),
-        timestamp,
         nonce,
         message: message.to_vec(),
         signature: Vec::new(),
@@ -495,7 +494,7 @@ pub fn sign_message(
 }
 
 /// Current Unix time in milliseconds (UTC), saturating at the epoch.
-fn now_unix_millis() -> u64 {
+pub fn now_unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -622,19 +621,19 @@ mod tests {
     }
 
     #[test]
-    fn signing_payload_uses_little_endian_timestamp() {
+    fn signing_payload_matches_sensor_id_nonce_message_layout() {
         // Locks the wire layout against `airalab/connectivity-cloud`
-        // (`buildEnvelopeSigningBytes` + little-endian `timestampToLeBytes`).
+        // (`buildEnvelopeSigningBytes`). Connectivity Protocol v1-beta.2
+        // dropped the envelope-level timestamp, so the signed payload is now
+        // just `sensor_id || nonce || message`.
         let envelope = SignedEnvelope {
             sensor_id: vec![1u8; SENSOR_ID_LEN],
-            timestamp: 1,
             nonce: vec![2u8; MIN_NONCE_LEN],
             message: vec![3u8; 4],
             signature: Vec::new(),
         };
         let mut expected = Vec::new();
         expected.extend_from_slice(&[1u8; SENSOR_ID_LEN]);
-        expected.extend_from_slice(&[1, 0, 0, 0, 0, 0, 0, 0]); // 1u64 little-endian
         expected.extend_from_slice(&[2u8; MIN_NONCE_LEN]);
         expected.extend_from_slice(&[3u8; 4]);
         assert_eq!(signing_payload(&envelope), expected);

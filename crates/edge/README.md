@@ -48,6 +48,8 @@ payload — no schemas to hand-write:
 ```console
 $ edge message --board urban temp=21.5 humidity=44 gps=51.5,-0.12,35
 [M] Message
+    |-- [#] node_id:   0
+    |-- [T] timestamp: 1789660215567
     |-- [S] public:  bme280 temperature=21.50°C
     |-- [S] public:  bme280 humidity=44.00%
     `-- [S] public:  gps lat=51.50000 lon=-0.12000 height_m=35.0
