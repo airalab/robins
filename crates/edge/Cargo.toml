@@ -54,7 +54,7 @@ libcps = { workspace = true, optional = true }
 # decoded/encoded at runtime through the `prost` derive. Regeneration is a
 # developer-only step gated behind the `gen` feature (see `build.rs`); normal
 # builds simply `include!` the committed module and never invoke `protoc`.
-prost.workspace = true 
+prost.workspace = true
 
 # Meshtastic radio ingress transport: serial connection, framing and the
 # generated Meshtastic protobuf types (`FromRadio`, `MeshPacket`, `Data`,
@@ -74,6 +74,7 @@ walkdir = { workspace = true, optional = true }
 # and by the observability tests to drive the ops router via `tower::oneshot`.
 serde_json.workspace = true
 tower.workspace = true
+hex.workspace = true
 
 [features]
 default = ["cli"]

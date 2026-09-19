@@ -26,6 +26,7 @@
 //! relaxed.
 
 use bytes::Bytes;
+use sha2::{Digest, Sha256};
 
 /// Transport version this parser implements (spec §7).
 pub const TRANSPORT_VERSION: u8 = 1;
@@ -204,6 +205,90 @@ fn parse_fragment(payload: Bytes) -> Result<Frame, FrameError> {
     }))
 }
 
+// ---------------------------------------------------------------------------
+// Encoding (sender side)
+// ---------------------------------------------------------------------------
+//
+// Used by `edge sensor meshtastic` to turn one exact, already-encoded
+// `SignedEnvelope` byte string into the `Data.payload` byte strings sent over
+// the mesh. This is the exact inverse of `parse_frame`/`parse_fragment` above
+// and MUST stay in lock-step with their constants — there is deliberately
+// only one copy of `SINGLE_CONTROL`, `FRAGMENT_CONTROL`, `MAX_SINGLE_BODY`,
+// `MAX_FRAGMENT_BODY` and `MAX_FRAGMENT_COUNT` in this module, shared by both
+// the ingress (receive) and sensor (send) code paths.
+
+/// Reasons `raw_payload` cannot be encoded as Transport v1 frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum EncodeError {
+    /// There is nothing to send.
+    #[error("empty payload")]
+    EmptyPayload,
+    /// The payload would require more fragments than [`MAX_FRAGMENT_COUNT`]
+    /// (the wire `fragment_count` nibble cannot represent more, and the
+    /// sender must not silently truncate data).
+    #[error("payload requires {0} fragments, exceeding the maximum of {MAX_FRAGMENT_COUNT}")]
+    TooManyFragments(usize),
+}
+
+/// Compute the transport-level `message_id`: the first [`MESSAGE_ID_LEN`]
+/// bytes of `SHA256(raw_payload)`, copied in digest order (spec §9.1).
+///
+/// This is a transport-local reassembly tag, distinct from (and much shorter
+/// than) any upper-layer envelope/dedup id.
+pub fn message_id(raw_payload: &[u8]) -> MessageId {
+    let digest = Sha256::digest(raw_payload);
+    let mut id: MessageId = [0u8; MESSAGE_ID_LEN];
+    id.copy_from_slice(&digest[..MESSAGE_ID_LEN]);
+    id
+}
+
+/// Encode `raw_payload` (the exact, already-serialized upper-layer bytes,
+/// e.g. a `SignedEnvelope`) into one or more Transport v1 wire frames, ready
+/// to be sent one-per-packet as `Data.payload`.
+///
+/// A payload fitting within [`MAX_SINGLE_BODY`] becomes a single `SINGLE`
+/// frame. A larger payload is split into fixed-size [`MAX_FRAGMENT_BODY`]
+/// chunks (the last chunk may be shorter) and emitted as `FRAGMENT` frames
+/// sharing one [`message_id`]. Never truncates: payloads that would need
+/// more than [`MAX_FRAGMENT_COUNT`] fragments are rejected outright.
+pub fn encode_frames(raw_payload: &[u8]) -> Result<Vec<Vec<u8>>, EncodeError> {
+    if raw_payload.is_empty() {
+        return Err(EncodeError::EmptyPayload);
+    }
+
+    if raw_payload.len() <= MAX_SINGLE_BODY {
+        let mut frame = Vec::with_capacity(1 + raw_payload.len());
+        frame.push(SINGLE_CONTROL);
+        frame.extend_from_slice(raw_payload);
+        return Ok(vec![frame]);
+    }
+
+    let chunks: Vec<&[u8]> = raw_payload.chunks(MAX_FRAGMENT_BODY).collect();
+    if chunks.len() > MAX_FRAGMENT_COUNT {
+        return Err(EncodeError::TooManyFragments(chunks.len()));
+    }
+    // `raw_payload.len() > MAX_SINGLE_BODY (220)` and `MAX_FRAGMENT_BODY`
+    // (213) together guarantee at least two chunks, matching
+    // `MIN_FRAGMENT_COUNT`.
+    let count = chunks.len() as u8;
+    let id = message_id(raw_payload);
+
+    Ok(chunks
+        .into_iter()
+        .enumerate()
+        .map(|(index, body)| {
+            let index = index as u8;
+            let descriptor = ((count - 1) << 4) | index;
+            let mut frame = Vec::with_capacity(FRAGMENT_HEADER_LEN + body.len());
+            frame.push(FRAGMENT_CONTROL);
+            frame.extend_from_slice(&id);
+            frame.push(descriptor);
+            frame.extend_from_slice(body);
+            frame
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,5 +461,90 @@ mod tests {
             Frame::Fragment(f) => assert_eq!(f.message_id, id),
             other => panic!("expected fragment, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Encoding (sender side)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn empty_payload_is_rejected_for_encoding() {
+        assert_eq!(encode_frames(&[]).unwrap_err(), EncodeError::EmptyPayload);
+    }
+
+    #[test]
+    fn small_payload_encodes_as_single_frame() {
+        let payload = b"telemetry envelope bytes";
+        let frames = encode_frames(payload).expect("encodes");
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            parse_frame(Bytes::from(frames[0].clone())).unwrap(),
+            Frame::Single(Bytes::from_static(payload))
+        );
+    }
+
+    #[test]
+    fn maximum_size_payload_still_encodes_as_single_frame() {
+        let payload = vec![0xab; MAX_SINGLE_BODY];
+        let frames = encode_frames(&payload).expect("encodes");
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            parse_frame(Bytes::from(frames[0].clone())).unwrap(),
+            Frame::Single(Bytes::from(payload))
+        );
+    }
+
+    #[test]
+    fn one_byte_over_single_body_requires_two_fragments() {
+        let payload = vec![0xcd; MAX_SINGLE_BODY + 1];
+        let frames = encode_frames(&payload).expect("encodes");
+        assert_eq!(frames.len(), 2);
+        for frame in &frames {
+            match parse_frame(Bytes::from(frame.clone())).unwrap() {
+                Frame::Fragment(f) => assert_eq!(f.count, 2),
+                other => panic!("expected fragment, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn multi_fragment_envelope_round_trips_exactly() {
+        // Large enough to require several `MAX_FRAGMENT_BODY`-sized chunks
+        // plus a shorter final one.
+        let payload: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        let frames = encode_frames(&payload).expect("encodes");
+        assert!(frames.len() > 2, "expected a genuinely multi-fragment case");
+
+        let mut reassembled = Vec::new();
+        let mut expected_id = None;
+        for (expected_index, frame) in frames.iter().enumerate() {
+            match parse_frame(Bytes::from(frame.clone())).unwrap() {
+                Frame::Fragment(f) => {
+                    assert_eq!(f.index as usize, expected_index);
+                    assert_eq!(f.count as usize, frames.len());
+                    let id = *expected_id.get_or_insert(f.message_id);
+                    assert_eq!(f.message_id, id, "message_id must be shared");
+                    reassembled.extend_from_slice(&f.body);
+                }
+                other => panic!("expected fragment, got {other:?}"),
+            }
+        }
+        assert_eq!(reassembled, payload);
+        assert_eq!(expected_id.unwrap(), message_id(&payload));
+    }
+
+    #[test]
+    fn message_id_is_first_six_sha256_bytes() {
+        let payload = b"hello meshtastic";
+        let digest = Sha256::digest(payload);
+        assert_eq!(message_id(payload), digest[..MESSAGE_ID_LEN]);
+    }
+
+    #[test]
+    fn oversized_envelope_is_rejected_rather_than_truncated() {
+        // One byte more than fits in `MAX_FRAGMENT_COUNT * MAX_FRAGMENT_BODY`.
+        let payload = vec![0u8; MAX_REASSEMBLED_BYTES + 1];
+        let err = encode_frames(&payload).unwrap_err();
+        assert_eq!(err, EncodeError::TooManyFragments(MAX_FRAGMENT_COUNT + 1));
     }
 }

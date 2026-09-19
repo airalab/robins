@@ -60,7 +60,7 @@ dedup_ttl_secs = 300
 # accepted. The adapter owns its own connect/reconnect loop, so a missing or
 # disconnected radio never blocks daemon startup.
 [meshtastic]
-enabled = true 
+enabled = true
 transport = "serial"
 device = "/dev/ttyACM0"
 # PRIVATE_APP; production deployments should use a registered third-party

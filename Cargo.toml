@@ -21,7 +21,7 @@ resolver = "2"
 
 [workspace.dependencies]
 bs58 = "0.5.0"
-clap = { version = "4.2.5", features = ["derive","env"] }
+clap = { version = "4.2.5", features = ["derive", "env"] }
 color-eyre = { version = "0.6.3", default-features = false }
 futures = { version = "0.3.21", features = ["thread-pool"] }
 jsonrpsee = { version = "0.24.7", features = ["server"] }

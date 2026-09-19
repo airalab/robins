@@ -98,6 +98,31 @@ One accepted envelope, end to end: signed on a sensor, verified and
 deduplicated by the gateway, and counted in Prometheus metrics — all with the
 one binary.
 
+### 5. Meshtastic hardware smoke test (optional)
+
+With a Meshtastic radio attached to the gateway host (and Meshtastic ingress
+enabled in `gateway.toml`) and a second radio attached to the sensor host:
+
+```console
+$ edge message --board urban temp=21.5 humidity=44 \
+    | edge envelope --sign 0x4023...seed... \
+    | edge sensor meshtastic --device /dev/ttyACM0 --gateway '!deadbeef'
+envelope_id: 9a8b...
+meshtastic_message_id: 0x1a2b3c4d5e6f
+gateway: !deadbeef
+fragments: 1
+fragment 1/1: submitted
+submitted 1 fragments to !deadbeef
+```
+
+`edge sensor meshtastic` never builds or signs telemetry itself — it is a
+transport sender that fragments an existing `SignedEnvelope` per the
+Connectivity Protocol Meshtastic Transport v1 and unicasts it, with
+`want_ack = true`, to the configured gateway node (accepted as `!deadbeef`,
+`0xdeadbeef`, or a plain decimal id). Success here means every fragment was
+*submitted to the local radio* — Meshtastic firmware owns retransmission, so
+this is not a remote delivery confirmation.
+
 ## The toolbox at a glance
 
 | Command                 | Alias | Purpose                                                |
@@ -107,6 +132,7 @@ one binary.
 | `edge key inspect <uri>` | `k`   | Report the public identity for a seed or SS58 address.  |
 | `edge message`           | `m`   | Encode (compact argv) or decode a telemetry payload.   |
 | `edge envelope`          | `e`   | Sign, verify, encode or decode a `SignedEnvelope`.      |
+| `edge sensor meshtastic` | `s`   | Send an existing `SignedEnvelope` over Meshtastic (dev/hardware smoke test). |
 | `edge config generate`   | `c`   | Emit a validated default `gateway.toml`.                |
 | `edge config check`      | `c`   | Validate a configuration file.                          |
 
