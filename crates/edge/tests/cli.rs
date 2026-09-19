@@ -138,10 +138,79 @@ fn tampered_envelope_fails_verification() {
 }
 
 #[test]
-fn sensor_reports_unimplemented() {
-    let (code, _, stderr) = run_edge(&["sensor"], b"");
-    assert_eq!(code, 1);
-    assert!(stderr.contains("not yet implemented"), "stderr: {stderr}");
+fn sensor_meshtastic_missing_required_args_is_usage_error() {
+    // `--device` and `--gateway` are both mandatory.
+    let (code, _, stderr) = run_edge(&["sensor", "meshtastic"], b"");
+    assert_eq!(code, 2, "stderr: {stderr}");
+}
+
+#[test]
+fn sensor_meshtastic_invalid_gateway_is_usage_error() {
+    let (code, _, stderr) = run_edge(
+        &[
+            "sensor",
+            "meshtastic",
+            "--device",
+            "/dev/ttyACM0",
+            "--gateway",
+            "not-a-node-id",
+        ],
+        b"",
+    );
+    assert_eq!(code, 2, "stderr: {stderr}");
+    assert!(stderr.contains("--gateway"), "stderr: {stderr}");
+}
+
+#[test]
+fn sensor_meshtastic_invalid_envelope_fails_before_touching_the_radio() {
+    // Malformed stdin must be rejected (matching `ProtocolError::Decode`'s
+    // exit code 2, the same contract `edge envelope` already follows)
+    // without ever attempting to open the (nonexistent) serial device.
+    let (code, _, stderr) = run_edge(
+        &[
+            "sensor",
+            "meshtastic",
+            "--device",
+            "/nonexistent/ttyACM0",
+            "--gateway",
+            "!deadbeef",
+        ],
+        &[0xff, 0xff, 0xff],
+    );
+    assert_eq!(code, 2, "stderr: {stderr}");
+}
+
+#[test]
+fn sensor_meshtastic_unopenable_device_is_runtime_error() {
+    // A structurally valid envelope, but a serial device that cannot exist:
+    // fragmentation succeeds, so the failure must come from opening the
+    // device (exit 1), never a usage/protocol error.
+    let (code, envelope_hex, stderr) = run_edge(
+        &[
+            "envelope", "--sign", KEY_HEX, "--input", "binary", "--output", "hex",
+        ],
+        b"telemetry payload",
+    );
+    assert_eq!(code, 0, "stderr: {stderr}");
+    // Decode hex directly (not via `run_edge`, whose `String` stdout capture
+    // is lossy UTF-8 and would corrupt raw envelope bytes).
+    let envelope_bin =
+        hex::decode(envelope_hex.trim().trim_start_matches("0x")).expect("valid hex envelope");
+
+    let (code, _, stderr) = run_edge(
+        &[
+            "sensor",
+            "meshtastic",
+            "--device",
+            "/nonexistent/edge/ttyACM0",
+            "--gateway",
+            "!deadbeef",
+        ],
+        &envelope_bin,
+    );
+    assert_eq!(code, 1, "stderr: {stderr}");
+    assert!(stderr.contains("envelope_id:"), "stderr: {stderr}");
+    assert!(stderr.contains("fragments: 1"), "stderr: {stderr}");
 }
 
 #[test]

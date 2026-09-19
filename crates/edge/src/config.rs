@@ -19,10 +19,10 @@
 //!
 //! `edge gw` is configuration-first: the daemon is driven by a TOML file whose
 //! schema is defined here and mirrors the `edge` API specification. Sections for
-//! subsystems that land in later phases (`meshtastic`, `ipfs`, `blockchain`,
-//! `storage`) are modelled so that `edge config check` can validate a complete
-//! file, even though the MVP runtime only wires up `http`, `auth`, `pubsub` and
-//! `metrics`.
+//! subsystems that land in later phases (`ipfs`, `blockchain`, `storage`) are
+//! modelled so that `edge config check` can validate a complete file, even
+//! though the MVP runtime only wires up `http`, `meshtastic`, `auth`,
+//! `pubsub` and `metrics`.
 //!
 //! Secrets are never embedded directly: token/key material is referenced through
 //! `*_file` paths so it can be injected out-of-band and redacted by
@@ -45,7 +45,7 @@ pub struct Config {
     pub auth: AuthConfig,
     /// Native libp2p GossipSub publisher.
     pub pubsub: PubsubConfig,
-    /// Meshtastic ingress transport (deferred subsystem).
+    /// Meshtastic ingress transport.
     pub meshtastic: MeshtasticConfig,
     /// IPFS durable publishing (deferred subsystem).
     pub ipfs: IpfsConfig,
@@ -135,18 +135,67 @@ impl Default for PubsubConfig {
     }
 }
 
-/// Meshtastic ingress configuration (`[meshtastic]`, deferred subsystem).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Meshtastic ingress configuration (`[meshtastic]`).
+///
+/// Mirrors the receive-side parameters of the Connectivity Protocol
+/// Meshtastic Transport v1 specification
+/// (`src/protobufs/transport/meshtastic/v1.md`). The MVP only supports the
+/// `serial` transport kind; BLE and TCP radios are out of scope.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MeshtasticConfig {
     /// Whether Meshtastic ingress is enabled.
     pub enabled: bool,
-    /// Transport kind (`serial` or `ble`).
+    /// Transport kind. Only `"serial"` is currently supported.
     pub transport: Option<String>,
-    /// Serial device path or BLE target identifier.
+    /// Serial device path (e.g. `/dev/ttyACM0`).
     pub device: Option<String>,
-    /// Meshtastic channel/application to filter on.
-    pub channel: Option<String>,
+    /// Connectivity Protocol Meshtastic application `PortNum`.
+    ///
+    /// `PRIVATE_APP = 256` is appropriate for development; production
+    /// deployments should use a registered third-party port in `64..127`.
+    pub port_num: u32,
+    /// Maximum bytes retained for one reassembled envelope. The wire
+    /// protocol itself caps this at 3376 bytes (16 fragments * 211 bytes).
+    pub max_reassembled_bytes: usize,
+    /// Maximum fragments accepted for one envelope. Must not exceed the
+    /// protocol limit of 16.
+    pub max_fragments: usize,
+    /// Maximum number of incomplete reassembly slots retained globally.
+    pub max_pending: usize,
+    /// Maximum number of incomplete reassembly slots retained per mesh
+    /// sender.
+    pub max_pending_per_sender: usize,
+    /// Idle timeout for an incomplete assembly, in seconds: reset whenever a
+    /// new (non-duplicate) fragment advances it.
+    pub reassembly_timeout_secs: u64,
+    /// Absolute lifetime for an incomplete assembly, in seconds, measured
+    /// from creation and never extended.
+    pub reassembly_absolute_timeout_secs: u64,
+    /// Minimum serial reconnect backoff, in seconds.
+    pub reconnect_min_secs: u64,
+    /// Maximum serial reconnect backoff, in seconds.
+    pub reconnect_max_secs: u64,
+}
+
+impl Default for MeshtasticConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            transport: Some("serial".to_string()),
+            device: None,
+            // PRIVATE_APP, per the Transport v1 spec §4.
+            port_num: 256,
+            max_reassembled_bytes: 4096,
+            max_fragments: 16,
+            max_pending: 128,
+            max_pending_per_sender: 8,
+            reassembly_timeout_secs: 60,
+            reassembly_absolute_timeout_secs: 300,
+            reconnect_min_secs: 1,
+            reconnect_max_secs: 30,
+        }
+    }
 }
 
 /// IPFS durable publishing configuration (`[ipfs]`, deferred subsystem).
@@ -315,10 +364,10 @@ impl Config {
 
         if self.meshtastic.enabled {
             match self.meshtastic.transport.as_deref() {
-                Some("serial") | Some("ble") => {}
+                Some("serial") => {}
                 Some(other) => {
                     return Err(ConfigError::Invalid(format!(
-                        "unknown meshtastic.transport {other:?} (expected serial|ble)"
+                        "unknown meshtastic.transport {other:?} (expected \"serial\")"
                     )));
                 }
                 None => {
@@ -330,6 +379,50 @@ impl Config {
             if self.meshtastic.device.is_none() {
                 return Err(ConfigError::Invalid(
                     "meshtastic.enabled = true requires meshtastic.device".to_string(),
+                ));
+            }
+            if self.meshtastic.max_reassembled_bytes == 0 {
+                return Err(ConfigError::Invalid(
+                    "meshtastic.max_reassembled_bytes must be non-zero".to_string(),
+                ));
+            }
+            if self.meshtastic.max_fragments == 0
+                || self.meshtastic.max_fragments > crate::ingress::meshtastic::MAX_FRAGMENT_COUNT
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "meshtastic.max_fragments must be in 1..={} (Transport v1 wire limit)",
+                    crate::ingress::meshtastic::MAX_FRAGMENT_COUNT
+                )));
+            }
+            if self.meshtastic.max_pending == 0 {
+                return Err(ConfigError::Invalid(
+                    "meshtastic.max_pending must be non-zero".to_string(),
+                ));
+            }
+            if self.meshtastic.max_pending_per_sender == 0 {
+                return Err(ConfigError::Invalid(
+                    "meshtastic.max_pending_per_sender must be non-zero".to_string(),
+                ));
+            }
+            if self.meshtastic.reassembly_timeout_secs == 0 {
+                return Err(ConfigError::Invalid(
+                    "meshtastic.reassembly_timeout_secs must be non-zero".to_string(),
+                ));
+            }
+            if self.meshtastic.reassembly_absolute_timeout_secs == 0 {
+                return Err(ConfigError::Invalid(
+                    "meshtastic.reassembly_absolute_timeout_secs must be non-zero".to_string(),
+                ));
+            }
+            if self.meshtastic.reconnect_min_secs == 0 {
+                return Err(ConfigError::Invalid(
+                    "meshtastic.reconnect_min_secs must be non-zero".to_string(),
+                ));
+            }
+            if self.meshtastic.reconnect_max_secs < self.meshtastic.reconnect_min_secs {
+                return Err(ConfigError::Invalid(
+                    "meshtastic.reconnect_max_secs must be >= meshtastic.reconnect_min_secs"
+                        .to_string(),
                 ));
             }
         }

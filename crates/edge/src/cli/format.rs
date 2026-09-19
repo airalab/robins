@@ -138,6 +138,20 @@ fn tag_label(tag: &str) -> colored::ColoredString {
     format!("[{tag}]").bright_yellow().bold()
 }
 
+/// `stderr` counterpart of [`heading`], for commands (e.g. `edge sensor
+/// meshtastic`) whose `stdout` is reserved for piped binary data and which
+/// must therefore report progress/status on `stderr` instead.
+pub(crate) fn heading_err(tag: &str, title: impl std::fmt::Display) {
+    eprintln!("{} {}", tag_label(tag), title.to_string().bold());
+}
+
+/// `stderr` counterpart of [`line`]; see [`heading_err`].
+pub(crate) fn line_err(indent: usize, is_last: bool, tag: &str, text: impl std::fmt::Display) {
+    let pad = "    ".repeat(indent);
+    let glyph = if is_last { "`--" } else { "|--" };
+    eprintln!("{pad}{} {} {text}", glyph.bright_black(), tag_label(tag));
+}
+
 /// Sniff which [`ByteFormat`] `raw` is encoded in, for the decode direction.
 ///
 /// Order of precedence: strict hex (mandatory `0x` prefix, even-length,

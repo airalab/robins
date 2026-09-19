@@ -98,6 +98,31 @@ One accepted envelope, end to end: signed on a sensor, verified and
 deduplicated by the gateway, and counted in Prometheus metrics — all with the
 one binary.
 
+### 5. Meshtastic hardware smoke test (optional)
+
+With a Meshtastic radio attached to the gateway host (and Meshtastic ingress
+enabled in `gateway.toml`) and a second radio attached to the sensor host:
+
+```console
+$ edge message --board urban temp=21.5 humidity=44 \
+    | edge envelope --sign 0x4023...seed... \
+    | edge sensor meshtastic --device /dev/ttyACM0 --gateway '!deadbeef'
+envelope_id: 9a8b...
+meshtastic_message_id: 0x1a2b3c4d5e6f
+gateway: !deadbeef
+fragments: 1
+fragment 1/1: submitted
+submitted 1 fragments to !deadbeef
+```
+
+`edge sensor meshtastic` never builds or signs telemetry itself — it is a
+transport sender that fragments an existing `SignedEnvelope` per the
+Connectivity Protocol Meshtastic Transport v1 and unicasts it, with
+`want_ack = true`, to the configured gateway node (accepted as `!deadbeef`,
+`0xdeadbeef`, or a plain decimal id). Success here means every fragment was
+*submitted to the local radio* — Meshtastic firmware owns retransmission, so
+this is not a remote delivery confirmation.
+
 ## The toolbox at a glance
 
 | Command                 | Alias | Purpose                                                |
@@ -107,6 +132,7 @@ one binary.
 | `edge key inspect <uri>` | `k`   | Report the public identity for a seed or SS58 address.  |
 | `edge message`           | `m`   | Encode (compact argv) or decode a telemetry payload.   |
 | `edge envelope`          | `e`   | Sign, verify, encode or decode a `SignedEnvelope`.      |
+| `edge sensor meshtastic` | `s`   | Send an existing `SignedEnvelope` over Meshtastic (dev/hardware smoke test). |
 | `edge config generate`   | `c`   | Emit a validated default `gateway.toml`.                |
 | `edge config check`      | `c`   | Validate a configuration file.                          |
 
@@ -165,10 +191,28 @@ A fully commented example lives at [`examples/gateway.toml`](examples/gateway.to
 | `[pipeline]` | `ingress_buffer`      | `1024`                       | Ingress → pipeline channel capacity.                   |
 |              | `dedup_capacity`      | `8192`                       | Max retained dedup entries.                            |
 |              | `dedup_ttl_secs`      | `300`                        | Dedup entry time-to-live (seconds).                    |
+| `[meshtastic]` | `enabled`           | `false`                      | Enable the Meshtastic serial ingress transport.        |
+|              | `transport`           | `"serial"`                   | Radio transport kind; only `"serial"` is supported.    |
+|              | `device`              | —                            | Serial device path (e.g. `/dev/ttyACM0`); required if enabled. |
+|              | `port_num`            | `256` (`PRIVATE_APP`)        | Connectivity Protocol Meshtastic application `PortNum`. |
+|              | `max_reassembled_bytes` | `4096`                     | Max bytes retained per reassembled envelope (protocol ceiling: `3376`). |
+|              | `max_fragments`       | `16`                         | Max fragments per envelope (protocol ceiling: `16`).   |
+|              | `max_pending`         | `128`                        | Max incomplete reassembly slots retained globally.     |
+|              | `max_pending_per_sender` | `8`                       | Max incomplete reassembly slots retained per mesh sender. |
+|              | `reassembly_timeout_secs` | `60`                     | Idle timeout for an incomplete assembly (seconds).     |
+|              | `reassembly_absolute_timeout_secs` | `300`           | Absolute lifetime for an incomplete assembly (seconds). |
+|              | `reconnect_min_secs`  | `1`                          | Minimum serial reconnect backoff (seconds).            |
+|              | `reconnect_max_secs`  | `30`                         | Maximum serial reconnect backoff (seconds).            |
+
+Only decoded packets with `pki_encrypted = true`, addressed to `port_num`, are
+accepted as Connectivity Protocol ingress — this mirrors the PKI-authentication
+requirement in the Transport v1 spec (`src/protobufs/transport/meshtastic/v1.md`).
+The adapter owns its own connect/reconnect loop, so a missing or disconnected
+radio never blocks daemon startup or the HTTP ingress path.
 
 ### Deferred sections
 
-`[meshtastic]`, `[ipfs]`, `[blockchain]` and `[storage]` are parsed for forward
+`[ipfs]`, `[blockchain]` and `[storage]` are parsed for forward
 compatibility but have no effect in this build.
 
 ## Testing
