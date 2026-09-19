@@ -44,6 +44,34 @@ pub const PUBLISH_TOTAL: &str = "edge_publish_total";
 /// Currently connected libp2p peers (gauge).
 pub const CONNECTED_PEERS: &str = "edge_connected_peers";
 
+/// Meshtastic packets received on the configured `PortNum` (counter).
+pub const MESHTASTIC_PACKETS_RECEIVED_TOTAL: &str = "edge_meshtastic_packets_received_total";
+/// Meshtastic packets ignored (wrong port, non-application data, not
+/// PKI-authenticated) (counter).
+pub const MESHTASTIC_PACKETS_IGNORED_TOTAL: &str = "edge_meshtastic_packets_ignored_total";
+/// Meshtastic Transport v1 frames that failed structural validation (counter).
+pub const MESHTASTIC_FRAMES_INVALID_TOTAL: &str = "edge_meshtastic_frames_invalid_total";
+/// Fragmented Meshtastic reassemblies started (counter).
+pub const MESHTASTIC_REASSEMBLY_STARTED_TOTAL: &str = "edge_meshtastic_reassembly_started_total";
+/// Fragmented Meshtastic reassemblies completed successfully (counter).
+pub const MESHTASTIC_REASSEMBLY_COMPLETED_TOTAL: &str =
+    "edge_meshtastic_reassembly_completed_total";
+/// Fragmented Meshtastic reassemblies that expired (idle or absolute
+/// timeout) before completion (counter).
+pub const MESHTASTIC_REASSEMBLY_EXPIRED_TOTAL: &str = "edge_meshtastic_reassembly_expired_total";
+/// Fragmented Meshtastic reassemblies dropped due to a conflicting duplicate
+/// or `fragment_count` mismatch (counter).
+pub const MESHTASTIC_REASSEMBLY_CONFLICT_TOTAL: &str = "edge_meshtastic_reassembly_conflict_total";
+/// Fragmented Meshtastic reassemblies rejected for exceeding a configured
+/// size/count/pending limit (counter).
+pub const MESHTASTIC_REASSEMBLY_OVERSIZE_TOTAL: &str = "edge_meshtastic_reassembly_oversize_total";
+/// Currently pending (incomplete) Meshtastic reassemblies (gauge).
+pub const MESHTASTIC_REASSEMBLY_PENDING: &str = "edge_meshtastic_reassembly_pending";
+/// Meshtastic serial reconnect attempts (counter).
+pub const MESHTASTIC_RECONNECTS_TOTAL: &str = "edge_meshtastic_reconnects_total";
+/// Whether the Meshtastic serial session is currently up (gauge, 0 or 1).
+pub const MESHTASTIC_CONNECTION_UP: &str = "edge_meshtastic_connection_up";
+
 /// Install the global Prometheus recorder and register metric descriptions.
 ///
 /// Returns a [`PrometheusHandle`] used by the operations server to render the
@@ -80,6 +108,51 @@ fn describe() {
     );
     metrics::describe_counter!(PUBLISH_TOTAL, "Accepted envelopes published to GossipSub");
     metrics::describe_gauge!(CONNECTED_PEERS, "Currently connected libp2p peers");
+
+    metrics::describe_counter!(
+        MESHTASTIC_PACKETS_RECEIVED_TOTAL,
+        "Meshtastic packets received on the configured PortNum"
+    );
+    metrics::describe_counter!(
+        MESHTASTIC_PACKETS_IGNORED_TOTAL,
+        "Meshtastic packets ignored (wrong port, non-application data, not PKI-authenticated)"
+    );
+    metrics::describe_counter!(
+        MESHTASTIC_FRAMES_INVALID_TOTAL,
+        "Meshtastic Transport v1 frames that failed structural validation"
+    );
+    metrics::describe_counter!(
+        MESHTASTIC_REASSEMBLY_STARTED_TOTAL,
+        "Fragmented Meshtastic reassemblies started"
+    );
+    metrics::describe_counter!(
+        MESHTASTIC_REASSEMBLY_COMPLETED_TOTAL,
+        "Fragmented Meshtastic reassemblies completed successfully"
+    );
+    metrics::describe_counter!(
+        MESHTASTIC_REASSEMBLY_EXPIRED_TOTAL,
+        "Fragmented Meshtastic reassemblies that expired before completion"
+    );
+    metrics::describe_counter!(
+        MESHTASTIC_REASSEMBLY_CONFLICT_TOTAL,
+        "Fragmented Meshtastic reassemblies dropped due to a conflicting duplicate or count mismatch"
+    );
+    metrics::describe_counter!(
+        MESHTASTIC_REASSEMBLY_OVERSIZE_TOTAL,
+        "Fragmented Meshtastic reassemblies rejected for exceeding a configured limit"
+    );
+    metrics::describe_gauge!(
+        MESHTASTIC_REASSEMBLY_PENDING,
+        "Currently pending (incomplete) Meshtastic reassemblies"
+    );
+    metrics::describe_counter!(
+        MESHTASTIC_RECONNECTS_TOTAL,
+        "Meshtastic serial reconnect attempts"
+    );
+    metrics::describe_gauge!(
+        MESHTASTIC_CONNECTION_UP,
+        "Whether the Meshtastic serial session is currently up"
+    );
 }
 
 /// Build a non-global Prometheus handle for tests.
@@ -112,6 +185,17 @@ mod tests {
             AUTH_REJECTED_TOTAL,
             PUBLISH_TOTAL,
             CONNECTED_PEERS,
+            MESHTASTIC_PACKETS_RECEIVED_TOTAL,
+            MESHTASTIC_PACKETS_IGNORED_TOTAL,
+            MESHTASTIC_FRAMES_INVALID_TOTAL,
+            MESHTASTIC_REASSEMBLY_STARTED_TOTAL,
+            MESHTASTIC_REASSEMBLY_COMPLETED_TOTAL,
+            MESHTASTIC_REASSEMBLY_EXPIRED_TOTAL,
+            MESHTASTIC_REASSEMBLY_CONFLICT_TOTAL,
+            MESHTASTIC_REASSEMBLY_OVERSIZE_TOTAL,
+            MESHTASTIC_REASSEMBLY_PENDING,
+            MESHTASTIC_RECONNECTS_TOTAL,
+            MESHTASTIC_CONNECTION_UP,
         ] {
             assert!(name.starts_with("edge_"), "{name} missing edge_ prefix");
             assert_eq!(name, name.to_lowercase(), "{name} must be snake_case");

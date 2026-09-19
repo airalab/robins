@@ -38,6 +38,7 @@ mod envelope;
 mod format;
 mod key;
 mod message;
+mod sensor;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -124,13 +125,10 @@ enum Command {
         #[arg(short, long, default_value = crate::config::DEFAULT_CONFIG_PATH)]
         config: std::path::PathBuf,
     },
-    /// Produce signed envelopes from local sources !!! not yet implemented !!!.
-    #[command(alias = "s")]
-    Sensor {
-        /// Captured arguments (parsing deferred until implemented).
-        #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
-        args: Vec<String>,
-    },
+    /// Send an existing `SignedEnvelope` onto a real transport (e.g.
+    /// Meshtastic) [ALIAS: s].
+    #[command(subcommand, alias = "s")]
+    Sensor(sensor::SensorCommand),
     /// Encode or decode a `SignedEnvelope` [ALIAS: e].
     #[command(alias = "e")]
     Envelope(envelope::EnvelopeArgs),
@@ -161,9 +159,7 @@ pub fn run() -> ExitCode {
 
     let result = match cli.command {
         Command::Gateway { config } => run_gateway(config),
-        Command::Sensor { .. } => Err(CliError::runtime(
-            "`edge sensor` is not yet implemented in this build",
-        )),
+        Command::Sensor(cmd) => sensor::run(cmd),
         Command::Envelope(args) => envelope::run(args),
         Command::Message(args) => message::run(args),
         Command::Key(cmd) => key::run(cmd),

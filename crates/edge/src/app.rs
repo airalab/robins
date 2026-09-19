@@ -35,7 +35,8 @@
 
 use crate::auth;
 use crate::config::Config;
-use crate::ingress::{self, IngressSender};
+use crate::ingress::meshtastic::MeshtasticIngress;
+use crate::ingress::{self, Ingress, IngressSender};
 use crate::observability::{self, Health};
 use crate::p2p::{self, GossipConfig, GossipNode, PeerRegistry};
 use crate::pipeline::{ChannelSink, DedupCache, MessageSink, Pipeline};
@@ -136,13 +137,20 @@ impl EdgeApp {
         // HTTP ingress.
         let http_addr = if config.http.enabled {
             Some(
-                spawn_http_ingress(&config, ingress_tx, &controller, &mut tasks)
+                spawn_http_ingress(&config, ingress_tx.clone(), &controller, &mut tasks)
                     .await
                     .context("failed to start HTTP ingress")?,
             )
         } else {
             None
         };
+
+        // Meshtastic ingress. Unlike HTTP, the radio may be absent or
+        // disconnected at startup; the adapter owns its own reconnect/backoff
+        // loop so a missing device never blocks daemon startup.
+        if config.meshtastic.enabled {
+            spawn_meshtastic_ingress(&config, ingress_tx, &controller, &mut tasks);
+        }
 
         // Operations server.
         let ops_addr = spawn_ops_server(&config, health, metrics, peers, &controller, &mut tasks)
@@ -225,6 +233,26 @@ async fn spawn_http_ingress(
         }
     }));
     Ok(addr)
+}
+
+/// Spawn the Meshtastic serial ingress adapter, if enabled.
+///
+/// The adapter manages its own connect/reconnect loop against the configured
+/// serial device, so this simply hands it the shared ingress channel and a
+/// shutdown subscription and lets it run for the lifetime of the daemon.
+fn spawn_meshtastic_ingress(
+    config: &Config,
+    ingress_tx: IngressSender,
+    controller: &ShutdownController,
+    tasks: &mut Vec<JoinHandle<()>>,
+) {
+    let ingress = Box::new(MeshtasticIngress::new(config.meshtastic.clone()));
+    let shutdown = controller.subscribe();
+    tasks.push(tokio::spawn(async move {
+        if let Err(err) = ingress.run(ingress_tx, shutdown).await {
+            tracing::error!(%err, "Meshtastic ingress terminated with an error");
+        }
+    }));
 }
 
 /// Bind and serve the operations endpoints, returning the bound address.

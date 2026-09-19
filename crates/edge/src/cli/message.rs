@@ -85,7 +85,28 @@ EXAMPLES:
       --suri 0xd6a1...seed... --output hex
 
     # Decode a wire message (hex here) back into a human-readable debug dump.
-    edge message 0xdeadbeef.. --input hex --output text")]
+    edge message 0xdeadbeef.. --input hex --output text
+
+MEASUREMENTS:
+    board    sensor      measurement   alias   unit      range/example
+    urban    bme280      temperature   temp    °C        -327.68..327.67 (e.g. 21.5)
+    urban    bme280      humidity              %RH       0..100 (e.g. 44)
+    urban    bme280      pressure              hPa       e.g. 1013.25
+    urban    sds011      pm25                  µg/m³     e.g. 12.3
+    urban    sds011      pm10                  µg/m³     e.g. 18.7
+    urban    ics43434    noise_max             dB        e.g. 62
+    urban    ics43434    noise_avg             dB        e.g. 48
+    insight  bme680      temperature   temp    °C        -327.68..327.67 (e.g. 21.5)
+    insight  bme680      humidity              %RH       0..100 (e.g. 44)
+    insight  bme680      pressure              hPa       e.g. 1013.25
+    insight  scd41       co2                   ppm       e.g. 800
+    insight  scd41       temperature   temp    °C        -327.68..327.67 (e.g. 21.5)
+    insight  scd41       humidity              %RH       0..100 (e.g. 44)
+    both     gps         gps=<lat>,<lon>[,<height_m>]     e.g. gps=51.5,-0.12,35
+
+    `<sensor>.` is required only when a board has more than one sensor
+    producing the same measurement name (e.g. `temperature` on `insight`);
+    otherwise the sensor is inferred from the board and measurement name.")]
 pub(crate) struct MessageArgs {
     /// Compact measurements when encoding from argv (one per value, e.g.
     /// `temp=21.5` or `bme680.co2=800`), or a single encoded DATA value with
