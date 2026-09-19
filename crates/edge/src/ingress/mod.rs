@@ -18,7 +18,7 @@
 //! Ingress transports and the canonical message they all produce.
 //!
 //! The protocol is canonical and transports are adapters: every transport
-//! (HTTP today; Meshtastic later) decodes its wire format into the single
+//! (HTTP, Meshtastic) decodes its wire format into the single
 //! [`IngressMessage`] type and hands it to the shared validation/auth pipeline
 //! over a **bounded** channel. Nothing about the transport ever influences
 //! authorization — that is decided solely from the verified envelope
@@ -30,6 +30,7 @@
 //! live in later pipeline stages.
 
 pub mod http;
+pub mod meshtastic;
 
 use crate::protocol::SignedEnvelope;
 use crate::shutdown::ShutdownSignal;
@@ -46,7 +47,7 @@ use tokio::sync::mpsc;
 pub enum Transport {
     /// HTTP `POST` ingress.
     Http,
-    /// Meshtastic radio ingress (reserved for a later phase).
+    /// Meshtastic radio ingress (serial, PKI-unicast Transport v1 framing).
     Meshtastic,
 }
 
@@ -75,6 +76,19 @@ impl TransportMetadata {
         Self {
             transport: Transport::Http,
             peer,
+        }
+    }
+
+    /// Construct metadata for the Meshtastic transport.
+    ///
+    /// `mesh_sender` is the originating Meshtastic node number
+    /// (`MeshPacket.from`), formatted as Meshtastic conventionally displays
+    /// node ids (`!xxxxxxxx`, lowercase hex). It is diagnostic transport
+    /// metadata only and must never influence authorization.
+    pub fn meshtastic(mesh_sender: u32) -> Self {
+        Self {
+            transport: Transport::Meshtastic,
+            peer: Some(format!("!{mesh_sender:08x}")),
         }
     }
 }

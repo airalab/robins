@@ -4,8 +4,8 @@
 # edit to taste. Generate a fresh default with `edge config generate` and
 # validate any file with `edge config check --config <path>`.
 #
-# Only the [http], [auth], [pubsub], [metrics] and [pipeline] sections are
-# active in the MVP build; [meshtastic], [ipfs], [blockchain] and [storage]
+# Only the [http], [auth], [pubsub], [metrics], [pipeline] and [meshtastic]
+# sections are active in the MVP build; [ipfs], [blockchain] and [storage]
 # describe deferred subsystems and are shown here disabled for reference.
 
 # --- HTTP ingress -----------------------------------------------------------
@@ -53,10 +53,31 @@ ingress_buffer = 1024
 dedup_capacity = 8192
 dedup_ttl_secs = 300
 
-# --- Deferred subsystems (inactive in the MVP build) ------------------------
+# --- Meshtastic ingress ------------------------------------------------------
+# Receives Connectivity Protocol envelopes over a Meshtastic v1 mesh via a
+# locally-attached radio, per `src/protobufs/transport/meshtastic/v1.md`.
+# Only decoded packets with pki_encrypted = true, addressed to `port_num`, are
+# accepted. The adapter owns its own connect/reconnect loop, so a missing or
+# disconnected radio never blocks daemon startup.
 [meshtastic]
-enabled = false
+enabled = true 
+transport = "serial"
+device = "/dev/ttyACM0"
+# PRIVATE_APP; production deployments should use a registered third-party
+# port in 64..127 instead.
+port_num = 256
+# Wire protocol ceiling is 3408 bytes (16 fragments * 213 bytes).
+max_reassembled_bytes = 4096
+# Wire protocol ceiling is 16 fragments.
+max_fragments = 16
+max_pending = 128
+max_pending_per_sender = 8
+reassembly_timeout_secs = 60
+reassembly_absolute_timeout_secs = 300
+reconnect_min_secs = 1
+reconnect_max_secs = 30
 
+# --- Deferred subsystems (inactive in the MVP build) ------------------------
 [ipfs]
 enabled = false
 providers = []
