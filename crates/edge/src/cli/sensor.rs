@@ -36,10 +36,12 @@
 //! reliable (`want_ack = true`) unicast to a configured Meshtastic gateway
 //! node over USB serial.
 //!
-//! This command reports **local submission**, not remote delivery: success
-//! means every fragment was handed to the local radio, not that the gateway
-//! has received or acknowledged it. Meshtastic firmware owns retransmission;
-//! this command never retries a fragment itself.
+//! This command reports **confirmed delivery**: success means every
+//! fragment's mesh routing acknowledgement was received from the gateway
+//! (bounded by `--ack-timeout` per fragment), not merely that it was handed
+//! to the local radio. Meshtastic firmware owns retransmission; this
+//! command never retries a fragment itself, it only waits for the ack that
+//! confirms retransmission (if any) already succeeded.
 //!
 //! The actual serial I/O ([`RadioTransport`]) is kept behind the small
 //! [`FragmentTransport`] trait so the fragment-submission loop
@@ -54,9 +56,10 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 use meshtastic::api::{ConnectedStreamApi, StreamApi};
 use meshtastic::packet::{PacketDestination, PacketReceiver, PacketRouter};
-use meshtastic::protobufs::{from_radio, PortNum};
+use meshtastic::protobufs::{from_radio, mesh_packet, routing, PortNum, Routing};
 use meshtastic::types::{EncodedMeshPacketData, MeshChannel, NodeId};
 use meshtastic::utils;
+use meshtastic::Message as _;
 use std::convert::Infallible;
 use std::time::Duration;
 
@@ -90,6 +93,10 @@ pub(crate) struct MeshtasticArgs {
     /// Connectivity Protocol `PortNum` fragments are sent on.
     #[arg(long, value_name = "PORT", default_value_t = 256)]
     port_num: u32,
+    /// How long to wait for a mesh routing acknowledgement per fragment
+    /// before treating the send as failed.
+    #[arg(long, value_name = "SECONDS", default_value_t = 30)]
+    ack_timeout: u64,
 }
 
 /// How long to wait for the radio's configuration handshake (`MyInfo` +
@@ -165,11 +172,12 @@ fn run_meshtastic(args: MeshtasticArgs) -> CliResult {
         gateway,
         port_num,
         &fragments,
+        Duration::from_secs(args.ack_timeout),
     ))?;
 
     eprintln!(
         "{} {} fragments ({fragment_bytes} bytes) to {}",
-        "submitted".green().bold(),
+        "delivered".green().bold(),
         fragments.len(),
         format!("!{gateway:08x}").bright_yellow().bold()
     );
@@ -204,9 +212,16 @@ fn parse_node_id(input: &str) -> Result<u32, String> {
 /// Meshtastic radio ([`RadioTransport`]) and once for tests
 /// ([`tests::FakeTransport`]), so [`submit_fragments`] never needs real
 /// hardware to be exercised.
+///
+/// Implementations must not report success until the fragment has actually
+/// been acknowledged (or otherwise confirmed delivered) — merely handing the
+/// packet to an internal queue is not enough, since the queue is drained by
+/// a background task that can be starved or cut short (e.g. by an immediate
+/// disconnect) before it ever reaches the wire.
 #[async_trait]
 trait FragmentTransport {
-    /// Send one fragment to `destination` on `port_num`, with `want_ack`.
+    /// Send one fragment to `destination` on `port_num`, with `want_ack`,
+    /// and wait for the mesh's routing acknowledgement before returning.
     async fn send_fragment(
         &mut self,
         fragment: Vec<u8>,
@@ -219,7 +234,10 @@ trait FragmentTransport {
 /// Submit every fragment in order, stopping at the first failure. Every
 /// fragment is sent to the same `destination`/`port_num` with
 /// `want_ack = true` (Transport v1 is unicast-only; Meshtastic firmware owns
-/// retransmission, so this loop never retries).
+/// retransmission, so this loop never retries). Each call to
+/// [`FragmentTransport::send_fragment`] only returns once that fragment has
+/// been acknowledged, so by the time this function returns every fragment is
+/// confirmed to have reached the gateway.
 async fn submit_fragments<T: FragmentTransport>(
     transport: &mut T,
     fragments: &[Vec<u8>],
@@ -237,18 +255,20 @@ async fn submit_fragments<T: FragmentTransport>(
             "  {} fragment {}/{total}: {} ({len} bytes)",
             "->".bright_black(),
             index + 1,
-            "submitted".green()
+            "acked".green()
         );
     }
     Ok(())
 }
 
 /// Real [`FragmentTransport`]: submits fragments to a connected, configured
-/// Meshtastic radio over serial.
+/// Meshtastic radio over serial and waits for each one's routing ack.
 struct RadioTransport<'a> {
     stream_api: &'a mut ConnectedStreamApi<meshtastic::api::state::Configured>,
     router: &'a mut SensorPacketRouter,
+    decoded_rx: &'a mut PacketReceiver,
     channel: MeshChannel,
+    ack_timeout: Duration,
 }
 
 #[async_trait]
@@ -260,7 +280,14 @@ impl FragmentTransport for RadioTransport<'_> {
         destination: PacketDestination,
         want_ack: bool,
     ) -> Result<(), String> {
+        // Sent via the crate's standard `send_mesh_packet` helper rather
+        // than building the `MeshPacket` by hand. `echo_response: true`
+        // makes the library invoke `PacketRouter::handle_mesh_packet` with
+        // the actual outgoing packet (including the id it generated
+        // internally), which `SensorPacketRouter` captures so we can
+        // correlate the routing ack below.
         let packet_data: EncodedMeshPacketData = fragment.into();
+        self.router.last_sent_id = None;
         self.stream_api
             .send_mesh_packet(
                 self.router,
@@ -269,24 +296,101 @@ impl FragmentTransport for RadioTransport<'_> {
                 destination,
                 self.channel,
                 want_ack,
-                false, // want_response: this is a one-way telemetry send.
-                false, // echo_response: no local echo needed.
+                false,
+                true,
                 None,
                 None,
             )
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+
+        if !want_ack {
+            return Ok(());
+        }
+        let packet_id = self
+            .router
+            .last_sent_id
+            .ok_or_else(|| "send_mesh_packet did not echo back a packet id".to_string())?;
+        wait_for_ack(self.decoded_rx, packet_id, self.ack_timeout).await
+    }
+}
+
+/// Wait for the mesh's routing acknowledgement (or an explicit failure) for
+/// the fragment with `expected_id`, bounded by `timeout`.
+///
+/// Meshtastic firmware replies to a reliable (`want_ack = true`) unicast on
+/// `PortNum::RoutingApp`, with `Data::request_id` set to the id of the
+/// packet being acknowledged and a `Routing` payload: `ErrorReason(NONE)`
+/// means the gateway actually received it, any other reason is a failure
+/// reported by the mesh (not by us). This is the only signal that a fragment
+/// left the local radio and reached the destination — merely handing it to
+/// `send_to_radio_packet` only means it was queued for the local write task.
+async fn wait_for_ack(
+    decoded_rx: &mut PacketReceiver,
+    expected_id: u32,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "timed out waiting for ack of packet 0x{expected_id:08x}"
+            ));
+        }
+        let packet = match tokio::time::timeout(remaining, decoded_rx.recv()).await {
+            Ok(Some(packet)) => packet,
+            Ok(None) => {
+                return Err("meshtastic serial connection closed while waiting for ack".to_string())
+            }
+            Err(_) => {
+                return Err(format!(
+                    "timed out waiting for ack of packet 0x{expected_id:08x}"
+                ))
+            }
+        };
+
+        let Some(from_radio::PayloadVariant::Packet(mesh_packet)) = packet.payload_variant else {
+            continue;
+        };
+        let Some(mesh_packet::PayloadVariant::Decoded(data)) = mesh_packet.payload_variant else {
+            continue;
+        };
+        if data.portnum != PortNum::RoutingApp as i32 || data.request_id != expected_id {
+            continue;
+        }
+
+        let routing = Routing::decode(data.payload.as_slice())
+            .map_err(|e| format!("failed to decode routing ack for 0x{expected_id:08x}: {e}"))?;
+        return match routing.variant {
+            Some(routing::Variant::ErrorReason(err)) if err == routing::Error::None as i32 => {
+                Ok(())
+            }
+            Some(routing::Variant::ErrorReason(err)) => {
+                let name = routing::Error::try_from(err)
+                    .map(|e| e.as_str_name())
+                    .unwrap_or("UNKNOWN");
+                Err(format!("mesh reported delivery failure: {name}"))
+            }
+            // A routing reply referencing our packet id without an explicit
+            // error reason (e.g. a route reply) still confirms the gateway
+            // processed the packet.
+            _ => Ok(()),
+        };
     }
 }
 
 /// Open the serial device, complete the Meshtastic configuration handshake,
-/// and submit every fragment as reliable unicast to `gateway`. Stops after
-/// the first local failure (no continuation, no retry).
+/// and submit every fragment as reliable unicast to `gateway`, waiting for
+/// each fragment's mesh routing ack (bounded by `ack_timeout`) before moving
+/// on to the next one. Stops after the first local failure or ack timeout
+/// (no continuation, no retry).
 async fn send_over_serial(
     device: &str,
     gateway: u32,
     port_num: PortNum,
     fragments: &[Vec<u8>],
+    ack_timeout: Duration,
 ) -> CliResult {
     let stream = utils::stream::build_serial_stream(device.to_string(), None, None, None)
         .map_err(|e| CliError::runtime(format!("failed to open serial device {device}: {e}")))?;
@@ -300,13 +404,16 @@ async fn send_over_serial(
         .map_err(|e| CliError::runtime(format!("failed to configure meshtastic session: {e}")))?;
 
     let node_id = match wait_for_ready(&mut decoded_rx, config_id).await {
-        Ok(node_id) => node_id,
+        Ok(ready) => ready,
         Err(e) => {
             let _ = stream_api.disconnect().await;
             return Err(CliError::runtime(e));
         }
     };
-    let mut router = SensorPacketRouter { node_id };
+    let mut router = SensorPacketRouter {
+        node_id,
+        last_sent_id: None,
+    };
     let channel =
         MeshChannel::new(0).expect("channel 0 is always a valid Meshtastic mesh channel index");
     let destination = PacketDestination::Node(NodeId::new(gateway));
@@ -314,22 +421,25 @@ async fn send_over_serial(
     let mut transport = RadioTransport {
         stream_api: &mut stream_api,
         router: &mut router,
+        decoded_rx: &mut decoded_rx,
         channel,
+        ack_timeout,
     };
 
     let result = submit_fragments(&mut transport, fragments, port_num, destination).await;
     let _ = stream_api.disconnect().await;
 
     result.map_err(|(index, e)| {
+        let len = fragments[index].len();
         eprintln!(
-            "  {} fragment {}/{}: {} {e}",
+            "  {} fragment {}/{} ({len} bytes): {} {e}",
             "->".bright_black(),
             index + 1,
             fragments.len(),
             "failed:".red().bold()
         );
         CliError::runtime(format!(
-            "failed to submit fragment {}/{} to the local radio: {e}",
+            "failed to deliver fragment {}/{} ({len} bytes): {e}",
             index + 1,
             fragments.len()
         ))
@@ -364,16 +474,21 @@ async fn wait_for_ready(decoded_rx: &mut PacketReceiver, config_id: u32) -> Resu
     }
 
     match node_id {
-        Some(node_id) if complete => Ok(node_id),
+        Some(own) if complete => Ok(own),
         _ => Err("meshtastic configuration handshake timed out".to_string()),
     }
 }
 
-/// Minimal [`PacketRouter`] implementation: `edge sensor meshtastic` only
-/// ever sends (with `echo_response = false`), so the packet-handling methods
-/// are never invoked; they exist purely to satisfy the trait.
+/// [`PacketRouter`] implementation used by `RadioTransport`. Its only real
+/// job is capturing the packet id that `send_mesh_packet` generated
+/// internally: passing `echo_response: true` makes the library call
+/// [`handle_mesh_packet`](PacketRouter::handle_mesh_packet) with the actual
+/// sent packet, which is the only way to learn its id (needed to correlate
+/// the routing ack in [`wait_for_ack`]) since `send_mesh_packet` doesn't
+/// return it directly.
 struct SensorPacketRouter {
     node_id: NodeId,
+    last_sent_id: Option<u32>,
 }
 
 impl PacketRouter<(), Infallible> for SensorPacketRouter {
@@ -386,8 +501,9 @@ impl PacketRouter<(), Infallible> for SensorPacketRouter {
 
     fn handle_mesh_packet(
         &mut self,
-        _packet: meshtastic::protobufs::MeshPacket,
+        packet: meshtastic::protobufs::MeshPacket,
     ) -> Result<(), Infallible> {
+        self.last_sent_id = Some(packet.id);
         Ok(())
     }
 

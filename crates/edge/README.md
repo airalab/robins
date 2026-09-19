@@ -195,7 +195,7 @@ A fully commented example lives at [`examples/gateway.toml`](examples/gateway.to
 |              | `transport`           | `"serial"`                   | Radio transport kind; only `"serial"` is supported.    |
 |              | `device`              | —                            | Serial device path (e.g. `/dev/ttyACM0`); required if enabled. |
 |              | `port_num`            | `256` (`PRIVATE_APP`)        | Connectivity Protocol Meshtastic application `PortNum`. |
-|              | `max_reassembled_bytes` | `4096`                     | Max bytes retained per reassembled envelope (protocol ceiling: `3408`). |
+|              | `max_reassembled_bytes` | `4096`                     | Max bytes retained per reassembled envelope (protocol ceiling: `3376`). |
 |              | `max_fragments`       | `16`                         | Max fragments per envelope (protocol ceiling: `16`).   |
 |              | `max_pending`         | `128`                        | Max incomplete reassembly slots retained globally.     |
 |              | `max_pending_per_sender` | `8`                       | Max incomplete reassembly slots retained per mesh sender. |

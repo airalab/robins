@@ -36,8 +36,8 @@ pub const SINGLE_CONTROL: u8 = 0x01;
 /// `FRAGMENT` control byte (`type = 01`, `version = 1`).
 pub const FRAGMENT_CONTROL: u8 = 0x41;
 
-/// Maximum upper-layer payload carried by one `SINGLE` frame (spec §8).
-pub const MAX_SINGLE_BODY: usize = 220;
+/// Maximum upper-layer payload carried by one `SINGLE` frame.
+pub const MAX_SINGLE_BODY: usize = 218;
 
 /// Length of the `FRAGMENT` header: control byte + message id + descriptor
 /// (spec §9).
@@ -45,7 +45,7 @@ pub const FRAGMENT_HEADER_LEN: usize = 8;
 /// Length of the `message_id` field, in bytes (spec §9.1).
 pub const MESSAGE_ID_LEN: usize = 6;
 /// Maximum fragment body size (spec §9).
-pub const MAX_FRAGMENT_BODY: usize = 213;
+pub const MAX_FRAGMENT_BODY: usize = 211;
 /// Minimum valid `fragment_count` (spec §9.2).
 pub const MIN_FRAGMENT_COUNT: u8 = 2;
 /// Maximum valid `fragment_count` (spec §9.2, §17).
@@ -267,8 +267,8 @@ pub fn encode_frames(raw_payload: &[u8]) -> Result<Vec<Vec<u8>>, EncodeError> {
     if chunks.len() > MAX_FRAGMENT_COUNT {
         return Err(EncodeError::TooManyFragments(chunks.len()));
     }
-    // `raw_payload.len() > MAX_SINGLE_BODY (220)` and `MAX_FRAGMENT_BODY`
-    // (213) together guarantee at least two chunks, matching
+    // `raw_payload.len() > MAX_SINGLE_BODY (218)` and `MAX_FRAGMENT_BODY`
+    // (211) together guarantee at least two chunks, matching
     // `MIN_FRAGMENT_COUNT`.
     let count = chunks.len() as u8;
     let id = message_id(raw_payload);

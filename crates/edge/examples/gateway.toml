@@ -60,13 +60,13 @@ dedup_ttl_secs = 300
 # accepted. The adapter owns its own connect/reconnect loop, so a missing or
 # disconnected radio never blocks daemon startup.
 [meshtastic]
-enabled = true
+enabled = false
 transport = "serial"
 device = "/dev/ttyACM0"
 # PRIVATE_APP; production deployments should use a registered third-party
 # port in 64..127 instead.
 port_num = 256
-# Wire protocol ceiling is 3408 bytes (16 fragments * 213 bytes).
+# Wire protocol ceiling is 3376 bytes (16 fragments * 211 bytes).
 max_reassembled_bytes = 4096
 # Wire protocol ceiling is 16 fragments.
 max_fragments = 16

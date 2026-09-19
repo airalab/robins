@@ -156,7 +156,7 @@ pub struct MeshtasticConfig {
     /// deployments should use a registered third-party port in `64..127`.
     pub port_num: u32,
     /// Maximum bytes retained for one reassembled envelope. The wire
-    /// protocol itself caps this at 3408 bytes (16 fragments * 213 bytes).
+    /// protocol itself caps this at 3376 bytes (16 fragments * 211 bytes).
     pub max_reassembled_bytes: usize,
     /// Maximum fragments accepted for one envelope. Must not exceed the
     /// protocol limit of 16.
