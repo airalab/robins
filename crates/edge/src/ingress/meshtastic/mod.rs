@@ -201,7 +201,7 @@ async fn connect_and_serve(
     metrics::gauge!(MESHTASTIC_REASSEMBLY_PENDING).set(0.0);
 
     metrics::gauge!(MESHTASTIC_CONNECTION_UP).set(0.0);
-    let _ = stream_api.disconnect().await
+    let _ = stream_api.disconnect().await;
     tracing::info!(device, "meshtastic serial session closed");
 
     (ended, true)
