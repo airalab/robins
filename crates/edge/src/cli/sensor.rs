@@ -51,6 +51,7 @@ use crate::ingress::meshtastic::frame;
 use crate::protocol;
 use async_trait::async_trait;
 use clap::{Args, Subcommand};
+use colored::Colorize;
 use meshtastic::api::{ConnectedStreamApi, StreamApi};
 use meshtastic::packet::{PacketDestination, PacketReceiver, PacketRouter};
 use meshtastic::protobufs::{from_radio, PortNum};
@@ -126,16 +127,33 @@ fn run_meshtastic(args: MeshtasticArgs) -> CliResult {
     protocol::decode_envelope(&raw).map_err(super::format::protocol_err)?;
 
     let envelope_id = protocol::envelope_id(&raw).to_hex();
-    eprintln!("envelope_id: {envelope_id}");
-
     let fragments =
         frame::encode_frames(&raw).map_err(|e| CliError::with_code(3, e.to_string()))?;
-    eprintln!(
-        "meshtastic_message_id: 0x{}",
-        hex::encode(frame::message_id(&raw))
+    let fragment_bytes: usize = fragments.iter().map(Vec::len).sum();
+
+    super::format::heading_err("S", "edge sensor meshtastic");
+    super::format::line_err(0, false, "#", format!("envelope_id: {envelope_id}"));
+    super::format::line_err(
+        0,
+        false,
+        "M",
+        format!(
+            "meshtastic_message_id: 0x{}",
+            hex::encode(frame::message_id(&raw))
+        ),
     );
-    eprintln!("gateway: !{gateway:08x}");
-    eprintln!("fragments: {}", fragments.len());
+    super::format::line_err(0, false, "G", format!("gateway: !{gateway:08x}"));
+    super::format::line_err(
+        0,
+        false,
+        "B",
+        format!(
+            "payload: {} bytes ({} bytes on-air across fragments)",
+            raw.len(),
+            fragment_bytes
+        ),
+    );
+    super::format::line_err(0, true, "F", format!("fragments: {}", fragments.len()));
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -149,7 +167,12 @@ fn run_meshtastic(args: MeshtasticArgs) -> CliResult {
         &fragments,
     ))?;
 
-    eprintln!("submitted {} fragments to !{gateway:08x}", fragments.len());
+    eprintln!(
+        "{} {} fragments ({fragment_bytes} bytes) to {}",
+        "submitted".green().bold(),
+        fragments.len(),
+        format!("!{gateway:08x}").bright_yellow().bold()
+    );
     Ok(())
 }
 
@@ -205,11 +228,17 @@ async fn submit_fragments<T: FragmentTransport>(
 ) -> Result<(), (usize, String)> {
     let total = fragments.len();
     for (index, fragment) in fragments.iter().enumerate() {
+        let len = fragment.len();
         transport
             .send_fragment(fragment.clone(), port_num, destination, true)
             .await
             .map_err(|e| (index, e))?;
-        eprintln!("fragment {}/{total}: submitted", index + 1);
+        eprintln!(
+            "  {} fragment {}/{total}: {} ({len} bytes)",
+            "->".bright_black(),
+            index + 1,
+            "submitted".green()
+        );
     }
     Ok(())
 }
@@ -292,7 +321,13 @@ async fn send_over_serial(
     let _ = stream_api.disconnect().await;
 
     result.map_err(|(index, e)| {
-        eprintln!("fragment {}/{}: failed: {e}", index + 1, fragments.len());
+        eprintln!(
+            "  {} fragment {}/{}: {} {e}",
+            "->".bright_black(),
+            index + 1,
+            fragments.len(),
+            "failed:".red().bold()
+        );
         CliError::runtime(format!(
             "failed to submit fragment {}/{} to the local radio: {e}",
             index + 1,
