@@ -23,12 +23,6 @@
 
     polkadot.url = "github:andresilva/polkadot.nix";
     polkadot.inputs.nixpkgs.follows = "nixpkgs";
-
-    robonomics.url = "github:airalab/robonomics";
-    robonomics.inputs.systems.follows = "systems";
-    robonomics.inputs.nixpkgs.follows = "nixpkgs";
-    robonomics.inputs.fenix.follows = "fenix";
-    robonomics.inputs.polkadot.follows = "polkadot";
   };
 
   outputs =
@@ -38,7 +32,6 @@
       systems,
       fenix,
       polkadot,
-      robonomics,
       ...
     }:
     let 
@@ -62,9 +55,13 @@
         }
       );
 
+      lib = eachSystem (system: pkgs: {
+        mkDevShell = args: import ./shell.nix ({ inherit pkgs; } // args);
+      });
+
       devShells = eachSystem (
         system: pkgs: rec {
-          default = robonomics.lib.${system}.mkDevShell {
+          default = self.lib.${system}.mkDevShell {
             packages = with pkgs; [
               openssl taplo actionlint cargo-nextest cargo-audit cargo-machete
               psvm pkgs.polkadot polkadot-parachain

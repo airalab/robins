@@ -81,41 +81,11 @@
         "type": "github"
       }
     },
-    "robonomics": {
-      "inputs": {
-        "fenix": [
-          "fenix"
-        ],
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "polkadot": [
-          "polkadot"
-        ],
-        "systems": [
-          "systems"
-        ]
-      },
-      "locked": {
-        "lastModified": 1789745575,
-        "narHash": "sha256-ikGTw+2n4qQYfhe0xrdfrZyqGDeIl6KuQzfFvwblFBM=",
-        "owner": "airalab",
-        "repo": "robonomics",
-        "rev": "dc0147b468c21477229bf788e3a06937c78e857e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "airalab",
-        "repo": "robonomics",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
         "fenix": "fenix",
         "nixpkgs": "nixpkgs",
         "polkadot": "polkadot",
-        "robonomics": "robonomics",
         "systems": "systems_2"
       }
     },
