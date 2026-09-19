@@ -116,13 +116,15 @@ pub(crate) fn run(command: SensorCommand) -> CliResult {
 fn run_meshtastic(args: MeshtasticArgs) -> CliResult {
     let gateway = parse_node_id(&args.gateway)
         .map_err(|e| CliError::usage(format!("invalid --gateway: {e}")))?;
-    let port_num = PortNum::try_from(args.port_num as i32).map_err(|_| {
-        CliError::usage(format!(
-            "invalid --port-num {}: not a PortNum this Meshtastic SDK build can represent \
-             (default 256 = PRIVATE_APP)",
-            args.port_num
-        ))
-    })?;
+    let port_num = i32::try_from(args.port_num)
+        .ok()
+        .and_then(|value| PortNum::try_from(value).ok())
+        .ok_or_else(|| {
+            CliError::usage(format!(
+                "invalid --port-num {}: not a PortNum this Meshtastic SDK build can represent (default 256 = PRIVATE_APP)",
+                args.port_num
+            ))
+        })?;
 
     // For MVP, stdin is raw protobuf binary (no hex/base64 sniffing): the
     // exact bytes read here are the exact bytes fragmented and transmitted,
