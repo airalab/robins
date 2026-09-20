@@ -23,7 +23,7 @@ rustPlatform.buildRustPackage {
   ];
 
   buildType = "production";
-  buildAndTestSubdir = "bin";
+  buildAndTestSubdir = "crates/robonomics";
 
   env = {
     SKIP_WASM_BUILD = 1;
