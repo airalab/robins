@@ -13,7 +13,7 @@ rustPlatform.buildRustPackage {
   src = lib.cleanSource ../../..;
 
   buildType = "production";
-  buildAndTestSubdir = "tools/libcps";
+  buildAndTestSubdir = "crates/libcps";
 
   meta = with lib; {
     mainProgram = "cps";
