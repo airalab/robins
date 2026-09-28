@@ -33,6 +33,7 @@
 //! - `2` — CLI usage or configuration error.
 //! - `3` — protocol / input error (malformed or invalid envelope).
 
+mod batch;
 mod config;
 mod envelope;
 mod format;
@@ -132,6 +133,9 @@ enum Command {
     /// Encode or decode a `SignedEnvelope` [ALIAS: e].
     #[command(alias = "e")]
     Envelope(envelope::EnvelopeArgs),
+    /// Encode or decode a `SignedEnvelopeBatch` [ALIAS: b].
+    #[command(alias = "b")]
+    Batch(batch::BatchArgs),
     /// Encode or decode a `Message` telemetry payload [ALIAS: m].
     #[command(alias = "m")]
     Message(message::MessageArgs),
@@ -161,6 +165,7 @@ pub fn run() -> ExitCode {
         Command::Gateway { config } => run_gateway(config),
         Command::Sensor(cmd) => sensor::run(cmd),
         Command::Envelope(args) => envelope::run(args),
+        Command::Batch(args) => batch::run(args),
         Command::Message(args) => message::run(args),
         Command::Key(cmd) => key::run(cmd),
         Command::Config(cmd) => config::run(cmd),

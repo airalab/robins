@@ -387,6 +387,21 @@ pub fn envelope_id(bytes: &[u8]) -> EnvelopeId {
     EnvelopeId(digest.into())
 }
 
+/// Decode a [`SignedEnvelopeBatch`] from protobuf wire bytes.
+pub fn decode_envelope_batch(bytes: &[u8]) -> Result<SignedEnvelopeBatch, ProtocolError> {
+    SignedEnvelopeBatch::decode(bytes).map_err(|e| ProtocolError::Decode(e.to_string()))
+}
+
+/// Encode a [`SignedEnvelopeBatch`] to protobuf wire bytes.
+///
+/// As with [`encode_envelope`], this is intended for constructing a *new*
+/// batch (e.g. packing individually-encoded envelopes together); it is not
+/// canonical, so re-encoding a received batch may not reproduce its original
+/// bytes.
+pub fn encode_envelope_batch(batch: &SignedEnvelopeBatch) -> Vec<u8> {
+    batch.encode_to_vec()
+}
+
 /// Decode a `core.v1.Message` (the complete sensor telemetry payload) from
 /// protobuf wire bytes, i.e. the bytes carried in a [`SignedEnvelope::message`]
 /// field.

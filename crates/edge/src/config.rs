@@ -183,7 +183,7 @@ impl Default for MeshtasticConfig {
         Self {
             enabled: false,
             transport: Some("serial".to_string()),
-            device: None,
+            device: Some("/dev/ttyACM0".to_string()),
             // PRIVATE_APP, per the Transport v1 spec §4.
             port_num: 256,
             max_reassembled_bytes: 4096,
