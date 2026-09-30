@@ -43,7 +43,7 @@ clap = { workspace = true, optional = true }
 env_logger = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
-xz2 = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 log.workspace = true
 # Used by `edge message` to encrypt `private:` sections (ECDH + AEAD) via
 # `libcps::crypto::Cipher`. Only the `crypto` module is needed, so CLI/
@@ -85,7 +85,7 @@ cli = [
   "dep:base64",
   "dep:colored",
   "dep:libcps",
-  "dep:xz2",
+  "dep:zstd",
 ]
 # Developer-only: regenerate the committed Connectivity Protocol module from the
 # vendored `.proto` sources. Run `cargo build -p edge --features gen`.

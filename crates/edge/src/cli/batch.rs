@@ -34,20 +34,18 @@
 //! human-readable debug rendering when stdout is a terminal (decode
 //! direction only), and to raw wire bytes otherwise.
 //!
-//! `--decompress`/`-d` runs the decoded wire bytes through an XZ decoder
+//! `--decompress`/`-d` runs the decoded wire bytes through a zstd decoder
 //! before parsing the protobuf `SignedEnvelopeBatch`, for batches that were
-//! stored/transmitted XZ-compressed (e.g. pulled from IPFS; see
+//! stored/transmitted zstd-compressed (e.g. pulled from IPFS; see
 //! `src/protobufs/README.md`'s batch-anchoring flow). `--compress`/`-c` is
-//! its `--pack` counterpart: it XZ-compresses the freshly packed batch
+//! its `--pack` counterpart: it zstd-compresses the freshly packed batch
 //! before writing it out.
 
 use super::format::{self, ByteFormat, ReprFormat};
 use super::{CliError, CliResult};
 use crate::protocol::{self, SignedEnvelope, SignedEnvelopeBatch};
 use base64::Engine;
-use std::io::{IsTerminal, Read, Write};
-use xz2::read::XzDecoder;
-use xz2::write::XzEncoder;
+use std::io::IsTerminal;
 
 use clap::Args;
 
@@ -70,11 +68,11 @@ EXAMPLES:
     # Pack envelopes given positionally instead of via stdin.
     edge batch -p --output hex 0xaabb... 0xccdd...
 
-    # Pack and XZ-compress in one step.
-    printf '%s\\n%s\\n' \"$ENV1_HEX\" \"$ENV2_HEX\" | edge batch -p -c > batch.bin.xz
+    # Pack and zstd-compress in one step.
+    printf '%s\\n%s\\n' \"$ENV1_HEX\" \"$ENV2_HEX\" | edge batch -p -c > batch.bin.zst
 
-    # Decode an XZ-compressed batch (e.g. fetched from IPFS).
-    cat batch.bin.xz | edge batch -d --output hex")]
+    # Decode a zstd-compressed batch (e.g. fetched from IPFS).
+    cat batch.bin.zst | edge batch -d --output hex")]
 pub(crate) struct BatchArgs {
     /// Batch data (decode direction), or one encoded envelope per value
     /// (with `--pack`). If omitted, reads from stdin (a single blob when
@@ -94,12 +92,12 @@ pub(crate) struct BatchArgs {
     /// decoding an existing batch.
     #[arg(short, long)]
     pack: bool,
-    /// Decompress the decoded wire bytes (XZ) before parsing them as a
+    /// Decompress the decoded wire bytes (zstd) before parsing them as a
     /// `SignedEnvelopeBatch`. Only meaningful when decoding (ignored with
     /// `--pack`).
     #[arg(short = 'd', long)]
     decompress: bool,
-    /// Compress the freshly packed `SignedEnvelopeBatch` (XZ) before writing
+    /// Compress the freshly packed `SignedEnvelopeBatch` (zstd) before writing
     /// it out. Only meaningful with `--pack`.
     #[arg(short = 'c', long, requires = "pack")]
     compress: bool,
@@ -115,7 +113,7 @@ pub(crate) fn run(args: BatchArgs) -> CliResult {
 
     let mut wire = protocol::encode_envelope_batch(&batch);
     if args.compress {
-        wire = compress_xz(&wire)?;
+        wire = compress_zstd(&wire)?;
     }
     let output = args.output.unwrap_or_else(|| default_output(args.pack));
     write_repr(&batch, &wire, output)
@@ -190,24 +188,16 @@ fn pack(args: &BatchArgs) -> Result<SignedEnvelopeBatch, CliError> {
     Ok(SignedEnvelopeBatch { batch: envelopes })
 }
 
-/// Decompress `input` as an XZ stream (`--decompress`/`-d`).
-fn decompress_xz(input: &[u8]) -> Result<Vec<u8>, CliError> {
-    let mut out = Vec::new();
-    XzDecoder::new(input)
-        .read_to_end(&mut out)
-        .map_err(|e| CliError::with_code(3, format!("invalid xz-compressed input: {e}")))?;
-    Ok(out)
+/// Decompress `input` as a zstd frame (`--decompress`/`-d`).
+fn decompress_zstd(input: &[u8]) -> Result<Vec<u8>, CliError> {
+    zstd::stream::decode_all(input)
+        .map_err(|e| CliError::with_code(3, format!("invalid zstd-compressed input: {e}")))
 }
 
-/// Compress `input` as an XZ stream (`--compress`/`-c`).
-fn compress_xz(input: &[u8]) -> Result<Vec<u8>, CliError> {
-    let mut encoder = XzEncoder::new(Vec::new(), 6);
-    encoder
-        .write_all(input)
-        .map_err(|e| CliError::runtime(format!("failed to xz-compress output: {e}")))?;
-    encoder
-        .finish()
-        .map_err(|e| CliError::runtime(format!("failed to xz-compress output: {e}")))
+/// Compress `input` as a zstd frame (`--compress`/`-c`) at the default level.
+fn compress_zstd(input: &[u8]) -> Result<Vec<u8>, CliError> {
+    zstd::stream::encode_all(input, zstd::DEFAULT_COMPRESSION_LEVEL)
+        .map_err(|e| CliError::runtime(format!("failed to zstd-compress output: {e}")))
 }
 
 /// Decode a batch from wire bytes (the non-packing behaviour of `edge
@@ -217,7 +207,7 @@ fn decode(args: &BatchArgs) -> Result<SignedEnvelopeBatch, CliError> {
     let format = byte_format(args, &raw)?;
     let wire = format::wire_from_input(&raw, format)?;
     let wire = if args.decompress {
-        decompress_xz(&wire)?
+        decompress_zstd(&wire)?
     } else {
         wire
     };
@@ -317,15 +307,15 @@ mod tests {
     }
 
     #[test]
-    fn compress_then_decompress_xz_roundtrips() {
+    fn compress_then_decompress_zstd_roundtrips() {
         let a = protocol::sign_message(&sample_identity(1), b"a", SignOptions::default());
         let batch = SignedEnvelopeBatch {
             batch: vec![a.clone()],
         };
         let wire = protocol::encode_envelope_batch(&batch);
 
-        let compressed = compress_xz(&wire).unwrap();
-        let decompressed = decompress_xz(&compressed).unwrap();
+        let compressed = compress_zstd(&wire).unwrap();
+        let decompressed = decompress_zstd(&compressed).unwrap();
         assert_eq!(decompressed, wire);
         let decoded = protocol::decode_envelope_batch(&decompressed).unwrap();
         assert_eq!(decoded.batch, vec![a]);
