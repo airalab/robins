@@ -188,7 +188,7 @@ impl Cipher {
 
                 // Hash and clamp secret for X25519
                 let mut hasher = Sha512::new();
-                hasher.update(&self.secret);
+                hasher.update(self.secret);
                 let hash = hasher.finalize();
 
                 let mut scalar_bytes = [0u8; 32];

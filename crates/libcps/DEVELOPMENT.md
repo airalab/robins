@@ -84,12 +84,21 @@ pub async fn execute(config: &Config, param: String) -> Result<()> {
 ### Unit Tests
 
 ```bash
-cargo test --package libcps
+cargo test -p libcps --lib --no-default-features
 ```
 
 ### Integration Testing
 
-For integration testing with a live node, see the README for setup instructions.
+The Scope/Access tests in `tests/scope_access.rs` need a running dev node with CPS pallet 1.0 and the `CpsApi` runtime API. They are `#[ignore]`d by default and read the node URL from `LIBCPS_TEST_WS` (default `ws://127.0.0.1:9944`); they sign with the `//Alice` and `//Bob` dev accounts:
+
+```bash
+LIBCPS_TEST_WS=ws://127.0.0.1:9944 \
+  cargo test -p libcps --test scope_access --no-default-features -- --ignored --test-threads=1
+```
+
+Effective permissions are verified through `Node::has_capability`, never by reading raw Access storage.
+
+> The `cps` CLI (`cli` feature) has not been adapted to the Scope/Access API yet and is expected to fail to compile until the follow-up issue lands.
 
 ## Code Quality
 

@@ -54,7 +54,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-libcps = "0.6.0"
+libcps = "0.7.0"
 ```
 
 #### Feature Flags
@@ -66,11 +66,11 @@ The library supports optional feature flags for flexible dependency management:
 ```toml
 # Default: CLI feature enabled
 [dependencies]
-libcps = "0.6.0"
+libcps = "0.7.0"
 
 # Library only, without CLI dependencies
 [dependencies]
-libcps = { version = "0.6.0", default-features = false }
+libcps = { version = "0.7.0", default-features = false }
 ```
 
 ### CLI Tool from Crates.io
@@ -292,13 +292,13 @@ async fn main() -> anyhow::Result<()> {
     let meta = BoundedVec(r#"{"type":"building","name":"HQ"}"#.as_bytes().to_vec());
     let payload = BoundedVec(r#"{"status":"online"}"#.as_bytes().to_vec());
     let root_node = Node::create(&client, None, Some(meta), Some(payload)).await?;
-    println!("Created root node: {}", root_node.id());
+    println!("Created root node: {}", root_node.id().0);
     
     // Create a child node
     let child_meta = BoundedVec(r#"{"type":"room","name":"Server Room"}"#.as_bytes().to_vec());
     let child_payload = BoundedVec(r#"{"temp":"22C"}"#.as_bytes().to_vec());
     let child_node = Node::create(&client, Some(root_node.id()), Some(child_meta), Some(child_payload)).await?;
-    println!("Created child node: {}", child_node.id());
+    println!("Created child node: {}", child_node.id().0);
     
     // Update node metadata
     let new_meta = BoundedVec(r#"{"type":"room","name":"Server Room","updated":true}"#.as_bytes().to_vec());
@@ -310,11 +310,42 @@ async fn main() -> anyhow::Result<()> {
     
     // Query and display node information
     let info = root_node.query().await?;
-    println!("Node {} has {} children", info.id, info.children.len());
+    println!("Node {} has {} children", info.id.0, info.children.len());
+    println!("Owned by {} (Scope {})", info.scope.owner, info.scope.id.0);
     
     Ok(())
 }
 ```
+
+### Scopes and Access Control
+
+Ownership belongs to a *Scope*, not to a node. A Scope is rooted at a node and owned by one account; nodes without their own Scope resolve to the Scope of their nearest ancestor that has one. `NodeInfo::scope` carries the resolved Scope (id, root node and owner).
+
+The library does not reimplement Scope resolution or authorization. It calls the runtime's `CpsApi` (`resolve_scope`, `has_capability`) and leaves authorization of every mutation to the runtime, so a rejected transaction surfaces as an error.
+
+```rust
+use libcps::node::{Capability, GrantMode};
+
+// Resolved Scope of a node, now or at a historical block
+let scope = node.resolve_scope().await?;
+let scope_then = node.resolve_scope_at(block_hash).await?;
+
+// Make the node the root of a new nested Scope. On an existing Scope root
+// this replaces the Scope with a fresh ScopeId, which is how ownership changes.
+node.create_scope().await?;
+
+// Let `bob` write to this node and its descendants in the same Scope
+node.grant_access(bob, Capability::Write, GrantMode::Subtree).await?;
+assert!(node.has_capability(bob, Capability::Write).await?);
+
+node.revoke_access(bob, Capability::Write).await?;
+```
+
+- `Node::query_at(block_hash)` reads topology, meta, payload, children and the resolved Scope from the same block; `Node::query()` uses the latest finalized block.
+- Meta and payload have separate runtime size limits; oversized values are rejected by the runtime.
+- Nodes can no longer be moved (`Node::move_to` was removed), and a Scope is deleted only together with its root node.
+
+> **Note:** The published runtime metadata does not describe the `CpsApi` runtime API, so libcps calls `CpsApi_resolve_scope` and `CpsApi_has_capability` by name and decodes the SCALE result itself.
 
 ### Data Types
 
