@@ -39,8 +39,8 @@ env_logger = "0.11"
 log = "0.4"
 zombienet-sdk = "0.4.15"
 meshtastic = { version = "0.1.9", features = ["serde", "tokio"] }
-subxt = "0.50.3"
-subxt-signer = "0.50.3"
+subxt = "0.51.0"
+subxt-signer = "0.51.0"
 curve25519-dalek = "5.0"
 x25519-dalek = { version = "3.0", features = ["static_secrets"] }
 chacha20poly1305 = "0.11"
@@ -89,6 +89,6 @@ libp2p = { version = "0.54.1", features = [
   "ed25519",
 ] }
 robonomics-chain-spec = "1.0.0"
-robonomics-runtime-subxt-api = "50.0.0"
-robonomics-runtime = "50.0.0"
-libcps = { version = "0.6.0", path = "./crates/libcps", default-features = false }
+robonomics-runtime-subxt-api = "51.0.0"
+robonomics-runtime = "51.0.0"
+libcps = { version = "0.7.0", path = "./crates/libcps", default-features = false }

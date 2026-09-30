@@ -55,10 +55,11 @@ use std::str::FromStr;
 /// let from_str = CryptoScheme::from_str("ed25519").unwrap();
 /// assert_eq!(from_str, CryptoScheme::Ed25519);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CryptoScheme {
     /// Schnorrkel SR25519 keys (Substrate native)
+    #[default]
     Sr25519,
     /// ED25519 keys (common in IoT, Home Assistant)
     Ed25519,
@@ -80,12 +81,6 @@ impl CryptoScheme {
             Self::Sr25519 => "SR25519",
             Self::Ed25519 => "ED25519",
         }
-    }
-}
-
-impl Default for CryptoScheme {
-    fn default() -> Self {
-        Self::Sr25519
     }
 }
 
@@ -126,9 +121,10 @@ impl FromStr for CryptoScheme {
 /// assert_eq!(algo.name(), "XChaCha20-Poly1305");
 /// assert_eq!(algo.nonce_size(), 24);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, Serialize, Deserialize, Default)]
 pub enum EncryptionAlgorithm {
     /// XChaCha20-Poly1305 AEAD (24-byte nonce)
+    #[default]
     XChaCha20Poly1305,
     /// AES-256-GCM AEAD (12-byte nonce)
     AesGcm256,
@@ -207,12 +203,6 @@ impl EncryptionAlgorithm {
             Self::AesGcm256 => "AES-256-GCM",
             Self::ChaCha20Poly1305 => "ChaCha20-Poly1305",
         }
-    }
-}
-
-impl Default for EncryptionAlgorithm {
-    fn default() -> Self {
-        Self::XChaCha20Poly1305
     }
 }
 

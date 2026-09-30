@@ -104,11 +104,18 @@
 //!
 //! ```toml
 //! # Default (CLI enabled)
-//! libcps = "0.1.0"
+//! libcps = "0.7.0"
 //!
 //! # Library only, no CLI
-//! libcps = { version = "0.1.0", default-features = false }
+//! libcps = { version = "0.7.0", default-features = false }
 //! ```
+//!
+//! ## Scopes and access
+//!
+//! Ownership belongs to the *Scope* a node resolves to, not to the node
+//! itself. [`node::Node::resolve_scope`] and [`node::Node::has_capability`] use
+//! the runtime `CpsApi`, and the runtime alone authorizes mutations. See the
+//! [`node`] module for details.
 //!
 //! ## Type Definitions
 //!

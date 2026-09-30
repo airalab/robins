@@ -148,7 +148,7 @@
 use anyhow::{anyhow, Result};
 use libcps::blockchain::{BoundedVec, Client, Config as BlockchainConfig};
 use libcps::crypto::{Cipher, CryptoScheme, EncryptedMessage, EncryptionAlgorithm};
-use libcps::node::{Node, PayloadSet};
+use libcps::node::{Node, NodeId, PayloadSet};
 use log::{debug, error, trace};
 use parity_scale_codec::Decode;
 use parity_scale_codec::Encode;
@@ -536,7 +536,7 @@ impl Config {
             .map_err(|e| anyhow!("Failed to subscribe to topic: {}", e))?;
 
         // Create Node handle for updates
-        let node = Node::new(&client, node_id);
+        let node = Node::new(&client, NodeId(node_id));
 
         // Process MQTT events
         debug!("Starting MQTT event loop for topic '{}'", topic);
@@ -716,7 +716,7 @@ impl Config {
         });
 
         // Create Node handle for querying
-        let node = Node::new(&client, node_id);
+        let node = Node::new(&client, NodeId(node_id));
 
         // Create node decrypt closure
         let node_data_to_string = |node_data: BoundedVec<u8>| {
