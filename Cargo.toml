@@ -78,6 +78,7 @@ metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 libp2p = { version = "0.54.1", features = [
   "gossipsub",
   "tcp",
+  "quic",
   "websocket",
   "dns",
   "noise",
