@@ -17,29 +17,29 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! Remove node command implementation.
 
+use super::Connection;
 use crate::display;
 use anyhow::Result;
 use colored::*;
-use libcps::blockchain::{Client, Config};
-use libcps::node::Node;
+use libcps::{prelude::*, NodeId};
 use std::io::{self, Write};
 
-pub async fn execute(config: &Config, node_id: u64, force: bool) -> Result<()> {
-    display::progress("Connecting to blockchain...");
+/// Delete `node_id`; refuses when it has children, and asks for confirmation
+/// unless `force` is set.
+pub async fn execute(connection: &Connection, node_id: u64, force: bool) -> Result<()> {
+    let client = connection.client().await?;
+    let signer = connection.signer()?;
 
-    let client = Client::new(config).await?;
-    let _keypair = client.require_keypair()?;
+    let node = NodeId::from(node_id);
+    if node.info(&client).await?.is_none() {
+        return Err(libcps::Error::NodeNotFound(node).into());
+    }
 
-    display::info(&format!("Connected to {}", config.ws_url));
-
-    // Check if node has children (query first)
-    let node = Node::new(&client, node_id);
-    let node_info = node.query().await?;
-
-    if !node_info.children.is_empty() && !force {
+    let children = node.children(&client).await?;
+    if !children.is_empty() {
         return Err(anyhow::anyhow!(
-            "Cannot delete node with {} children. Remove children first or use --force",
-            node_info.children.len()
+            "Cannot delete node with {} children. Remove the children first",
+            children.len()
         ));
     }
 
@@ -60,11 +60,12 @@ pub async fn execute(config: &Config, node_id: u64, force: bool) -> Result<()> {
         }
     }
 
-    let spinner = display::spinner("Submitting transaction...");
+    let tx = node.delete();
 
-    // Delete node using Node API
-    node.delete().await?;
+    let spinner = display::spinner("Submitting transaction...");
+    let receipt = client.submit_finalized(&tx, &signer).await;
     spinner.finish_and_clear();
+    receipt?;
 
     display::success(&format!(
         "Node {} deleted",

@@ -24,18 +24,18 @@
 use crate::display;
 use anyhow::Result;
 use colored::*;
-use libcps::blockchain::Config;
-use libcps::crypto::Cipher;
+use libcps::crypto::{Scheme, Signer, Sr25519};
+use libcps::AccountId;
 use mqtt_bridge as mqtt;
-use subxt::utils::AccountId32;
+use mqtt_bridge::BlockchainConfig;
 
 /// Subscribe to an MQTT topic and update blockchain node payload (CLI wrapper).
 ///
 /// This function provides a user-friendly CLI interface with colored output
 /// and progress messages for the MQTT subscribe bridge.
-pub async fn subscribe(
-    blockchain_config: &Config,
-    cipher: Option<&Cipher>,
+pub async fn subscribe<S: Scheme>(
+    blockchain_config: &BlockchainConfig,
+    cipher: Option<&Signer<S>>,
     mqtt_config: &mqtt::Config,
     topic: &str,
     node_id: u64,
@@ -52,13 +52,9 @@ pub async fn subscribe(
 
     if let Some(receiver_pub) = receiver_public.as_ref() {
         match (cipher, algorithm) {
-            (Some(cipher), Some(algorithm)) => {
-                display::info(&format!(
-                    "[E] Using encryption: {} with {}",
-                    algorithm,
-                    cipher.scheme()
-                ));
-                let receiver_account = AccountId32::from(*receiver_pub);
+            (Some(_), Some(algorithm)) => {
+                display::info(&format!("[E] Using encryption: {}", algorithm));
+                let receiver_account = AccountId::from(*receiver_pub);
                 display::info(&format!("[K] Receiver: {}", receiver_account));
             }
             (None, _) => {
@@ -117,7 +113,7 @@ pub async fn subscribe(
 /// This function provides a user-friendly CLI interface with colored output
 /// and progress messages for the MQTT publish bridge.
 pub async fn publish(
-    blockchain_config: &Config,
+    blockchain_config: &BlockchainConfig,
     mqtt_config: &mqtt::Config,
     topic: &str,
     node_id: u64,
@@ -175,16 +171,14 @@ pub async fn publish(
     });
 
     // Create cipher for decryption if requested
-    let cipher = if decrypt {
-        use libcps::crypto::{Cipher, CryptoScheme};
-
+    let cipher: Option<Signer<Sr25519>> = if decrypt {
         let suri = blockchain_config
             .suri
             .clone()
             .ok_or_else(|| anyhow::anyhow!("SURI required for decryption"))?;
         // Use default scheme for Cipher creation
         // Actual algorithm is auto-detected from encrypted message
-        Some(Cipher::new(suri, CryptoScheme::Sr25519)?)
+        Some(Signer::from_suri(&suri)?)
     } else {
         None
     };

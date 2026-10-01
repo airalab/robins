@@ -48,11 +48,11 @@
 //! ## Subscribe Bridge
 //!
 //! ```no_run
-//! use libcps::blockchain::Config;
+//! use mqtt_bridge::BlockchainConfig;
 //! use mqtt_bridge as mqtt;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let blockchain_config = Config {
+//! let blockchain_config = BlockchainConfig {
 //!     ws_url: "ws://localhost:9944".to_string(),
 //!     suri: Some("//Alice".to_string()),
 //! };
@@ -70,7 +70,7 @@
 //! // Using Config method API
 //! mqtt_config.subscribe(
 //!     &blockchain_config,
-//!     None,
+//!     None::<&libcps::crypto::Signer<libcps::crypto::Sr25519>>,
 //!     "sensors/temp",
 //!     1,
 //!     None,
@@ -86,7 +86,10 @@
 
 pub mod bridge;
 
+#[doc(hidden)]
+pub use libcps as __libcps;
+
 pub use bridge::{
-    parse_mqtt_url, BlockchainConfigData, Config, MessageHandler, PublishConfig, PublishHandler,
-    SubscribeConfig,
+    parse_mqtt_url, BlockchainConfig, BlockchainConfigData, Config, CryptoScheme, MessageHandler,
+    PublishConfig, PublishHandler, SubscribeConfig,
 };

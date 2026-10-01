@@ -15,98 +15,98 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Show command implementation.
+//! Show node tree command implementation.
 
+use super::Connection;
 use crate::display;
 use anyhow::Result;
-use libcps::blockchain::{BoundedVec, Client, Config};
-use libcps::crypto::{Cipher, EncryptedMessage};
-use libcps::node::Node;
+use libcps::crypto::{Cipher, EncryptedMessage, Scheme, Signer};
+use libcps::{prelude::*, Client, NodeId};
 use parity_scale_codec::Decode;
 use std::future::Future;
 use std::pin::Pin;
 
-pub async fn execute(config: &Config, cipher: Option<&Cipher>, node_id: u64) -> Result<()> {
-    display::progress("Connecting to blockchain...");
+/// Print `node_id` and its descendants as a tree, decrypting data with `cipher`
+/// when one is given.
+pub async fn execute<S: Scheme>(
+    connection: &Connection,
+    cipher: Option<&Signer<S>>,
+    node_id: u64,
+) -> Result<()> {
+    let client = connection.client().await?;
 
-    let client = Client::new(config).await?;
-
-    display::info(&format!("Connected to {}", config.ws_url));
     display::progress(&format!("Fetching node tree from node {node_id}..."));
 
-    // Print the tree recursively
-    print_node_tree(&client, node_id, cipher, "", true).await?;
+    print_node_tree(&client, NodeId::from(node_id), cipher, "", true).await?;
 
     Ok(())
 }
 
-/// Recursively print a node and all its children in tree format
-fn print_node_tree<'a>(
+/// Render stored bytes as text: encrypted messages are decrypted with `cipher`, or
+/// shown as JSON when there is no cipher; anything else must be UTF-8.
+fn data_to_string<S: Scheme>(data: Vec<u8>, cipher: Option<&Signer<S>>) -> Result<String> {
+    if let Ok(message) = EncryptedMessage::decode(&mut data.as_slice()) {
+        if let Some(cipher) = cipher {
+            let decrypted = cipher
+                .decrypt(&message, None)
+                .map_err(|e| anyhow::anyhow!("Failed to decrypt message: {}.", e))?;
+            String::from_utf8(decrypted).map_err(|_| anyhow::anyhow!("Invalid UTF-8 character"))
+        } else {
+            serde_json::to_string(&message)
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to convert encrypted message into JSON: {}.", e)
+                })
+                .map(|json_msg| format!("Encrypted: {}", json_msg))
+        }
+    } else {
+        String::from_utf8(data).map_err(|_| anyhow::anyhow!("Invalid UTF-8 character"))
+    }
+}
+
+fn print_node_tree<'a, S: Scheme>(
     client: &'a Client,
-    node_id: u64,
-    cipher: Option<&'a Cipher>,
+    node: NodeId,
+    cipher: Option<&'a Signer<S>>,
     prefix: &'a str,
     is_last: bool,
 ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
     Box::pin(async move {
-        // Query node using Node API
-        let node = Node::new(client, node_id);
-        let node_info = node.query().await?;
+        if node.info(client).await?.is_none() {
+            return Err(libcps::Error::NodeNotFound(node).into());
+        }
 
-        let node_data_to_string = |nd: BoundedVec<u8>| {
-            // Try to decode as EncryptedMessage first
-            if let Ok(message) = EncryptedMessage::decode(&mut nd.0.as_slice()) {
-                if let Some(cipher) = cipher {
-                    let decrypted = cipher
-                        .decrypt(&message, None)
-                        .map_err(|e| anyhow::anyhow!("Failed to decrypt message: {}.", e))?;
-                    String::from_utf8(decrypted)
-                        .map_err(|_| anyhow::anyhow!("Invalid UTF-8 character"))
-                } else {
-                    serde_json::to_string(&message)
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to convert encrypted message into JSON: {}.", e)
-                        })
-                        .map(|json_msg| format!("Encrypted: {}", json_msg))
-                }
-            } else {
-                // Treat as plain data
-                String::from_utf8(nd.0).map_err(|_| anyhow::anyhow!("Invalid UTF-8 character"))
-            }
-        };
+        let owner = node.resolve_scope(client).await?.owner;
+        let meta = node
+            .meta(client)
+            .await?
+            .map(|meta| data_to_string(meta, cipher))
+            .transpose()?;
+        let payload = node
+            .payload(client)
+            .await?
+            .map(|payload| data_to_string(payload, cipher))
+            .transpose()?;
+        let children = node.children(client).await?;
 
-        // Try to decrypt if requested and data is encrypted
-        let meta_str = match node_info.meta {
-            Some(meta) => Some(node_data_to_string(meta)?),
-            _ => None,
-        };
-
-        let payload_str = match node_info.payload {
-            Some(payload) => Some(node_data_to_string(payload)?),
-            _ => None,
-        };
-
-        // Print this node
         display::tree::print_node_recursive(
-            node_id,
-            node_info.owner,
-            meta_str.as_deref(),
-            payload_str.as_deref(),
+            node.0,
+            owner,
+            meta.as_deref(),
+            payload.as_deref(),
             prefix,
             is_last,
         );
 
-        // Recursively print children
-        if !node_info.children.is_empty() {
+        if !children.is_empty() {
             let child_prefix = if is_last {
                 format!("{}    ", prefix)
             } else {
                 format!("{}|   ", prefix)
             };
 
-            for (i, child_id) in node_info.children.iter().enumerate() {
-                let is_last_child = i == node_info.children.len() - 1;
-                print_node_tree(client, *child_id, cipher, &child_prefix, is_last_child).await?;
+            for (i, child) in children.iter().enumerate() {
+                let is_last_child = i == children.len() - 1;
+                print_node_tree(client, *child, cipher, &child_prefix, is_last_child).await?;
             }
         }
 

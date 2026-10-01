@@ -4558,7 +4558,7 @@ dependencies = [
  "sp-virtualization",
  "sp-wasm-interface",
  "subxt 0.44.3",
- "subxt-signer 0.44.3",
+ "subxt-signer",
  "thiserror 1.0.69",
  "thousands",
 ]
@@ -6757,27 +6757,26 @@ version = "0.7.0"
 dependencies = [
  "aes-gcm 0.11.1",
  "anyhow",
- "base64 0.23.1",
- "bs58",
  "chacha20poly1305 0.11.0",
  "clap",
  "colored",
  "curve25519-dalek 5.0.0",
  "easy-hex",
- "env_logger",
  "hex",
  "hkdf 0.13.0",
  "indicatif",
- "log",
  "parity-scale-codec",
+ "robonomics-chain-spec",
  "robonomics-runtime-subxt-api",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "sp-core",
  "subxt 0.51.0",
- "subxt-signer 0.51.0",
+ "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "x25519-dalek 3.0.0",
 ]
 
@@ -7900,17 +7899,16 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
- "env_logger",
  "hex",
  "libcps",
- "log",
  "parity-scale-codec",
  "rumqttc",
  "serde",
  "serde_json",
- "subxt 0.51.0",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -12004,9 +12002,9 @@ dependencies = [
 
 [[package]]
 name = "robonomics-chain-spec"
-version = "1.0.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d1291641ec3f2b9ebf26cbba4fd866a20d566e46c54fdbcc75edbd90ceefa72"
+checksum = "36f49019f0c00eb2eb22fc6c7422534e0651ee2261c15c4683c6c333ce624a10"
 
 [[package]]
 name = "robonomics-collator-rewards"
@@ -16447,34 +16445,6 @@ dependencies = [
  "sha2 0.10.9",
  "sp-crypto-hashing",
  "subxt-core",
- "thiserror 2.0.21",
- "zeroize",
-]
-
-[[package]]
-name = "subxt-signer"
-version = "0.51.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c253e20b0ffcd912dcd1dec87fbefe79c43ee6d81ba5d563d18728bba02640d"
-dependencies = [
- "base64 0.22.1",
- "bip39",
- "cfg-if",
- "crypto_secretbox",
- "hex",
- "hmac 0.12.1",
- "parity-scale-codec",
- "pbkdf2",
- "regex",
- "schnorrkel",
- "scrypt",
- "secp256k1 0.30.0",
- "secrecy 0.10.3",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sp-crypto-hashing",
- "subxt 0.51.0",
  "thiserror 2.0.21",
  "zeroize",
 ]

@@ -25,7 +25,6 @@ required-features = ["cli"]
 libcps.workspace = true
 
 # Blockchain / encoding
-subxt.workspace = true
 parity-scale-codec.workspace = true
 
 # MQTT
@@ -42,17 +41,17 @@ tokio.workspace = true
 anyhow.workspace = true
 
 # Logging
-log.workspace = true
+tracing.workspace = true
 
 # CLI & Output (optional, enabled by the `cli` feature)
 clap = { workspace = true, features = ["env"], optional = true }
 colored = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
-env_logger = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:colored", "dep:chrono", "dep:env_logger"]
+cli = ["dep:clap", "dep:colored", "dep:chrono", "dep:tracing-subscriber"]
 
 [package.metadata.docs.rs]
 all-features = true

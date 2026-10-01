@@ -15,64 +15,41 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Set payload command implementation (CLI interface).
-//!
-//! This module provides the CLI command wrapper for the library's node operations.
-//! It handles display formatting and user interaction while delegating business logic to the
-//! node module.
+//! Set payload command implementation.
 
+use super::{encrypt, Connection};
 use crate::display;
 use anyhow::Result;
 use colored::*;
-use libcps::blockchain::{BoundedVec, Client, Config};
-use libcps::crypto::Cipher;
-use libcps::node::Node;
-use parity_scale_codec::Encode;
-use subxt::utils::AccountId32;
+use libcps::crypto::{EncryptionAlgorithm, Scheme, Signer};
+use libcps::{prelude::*, NodeId};
 
-pub async fn execute(
-    config: &Config,
-    cipher: Option<&Cipher>,
+/// Replace the payload of `node_id`, encrypting it with `cipher` for
+/// `receiver_public` when a receiver is given.
+pub async fn execute<S: Scheme>(
+    connection: &Connection,
+    cipher: Option<&Signer<S>>,
     node_id: u64,
     data: String,
     receiver_public: Option<[u8; 32]>,
-    algorithm: Option<libcps::crypto::EncryptionAlgorithm>,
+    algorithm: Option<EncryptionAlgorithm>,
 ) -> Result<()> {
-    // CLI display: show connection progress
-    display::progress("Connecting to blockchain...");
+    let client = connection.client().await?;
+    let signer = connection.signer()?;
 
-    let client = Client::new(config).await?;
-    let _keypair = client.require_keypair()?;
-
-    display::info(&format!("Connected to {}", config.ws_url));
     display::info(&format!("Updating payload for node {node_id}"));
 
-    // Convert data to NodeData, applying encryption if requested
-    let payload_data = if let Some(receiver_pub) = receiver_public.as_ref() {
-        let cipher = cipher.ok_or_else(|| anyhow::anyhow!("Cipher required for encryption"))?;
-        let algorithm =
-            algorithm.ok_or_else(|| anyhow::anyhow!("Algorithm required for encryption"))?;
-        display::info(&format!(
-            "[E] Encrypting payload with {} using {}",
-            algorithm,
-            cipher.scheme()
-        ));
-        let receiver_account = AccountId32::from(*receiver_pub);
-        display::info(&format!("[K] Receiver: {}", receiver_account));
-
-        let encrypted_message = cipher.encrypt(data.as_bytes(), receiver_pub, algorithm)?;
-        let encrypted_bytes = encrypted_message.encode();
-        BoundedVec(encrypted_bytes)
-    } else {
-        BoundedVec(data.into_bytes())
+    let bytes = match receiver_public.as_ref() {
+        Some(receiver) => encrypt("payload", cipher, algorithm, receiver, data.as_bytes())?,
+        None => data.into_bytes(),
     };
 
-    // Create a Node handle and delegate to node operation (business logic)
-    let node = Node::new(&client, node_id);
+    let tx = NodeId::from(node_id).set_payload(bytes)?;
 
     let spinner = display::spinner("Submitting transaction...");
-    let _events = node.set_payload(Some(payload_data)).await?;
+    let receipt = client.submit_finalized(&tx, &signer).await;
     spinner.finish_and_clear();
+    receipt?;
 
     display::success(&format!(
         "Payload updated for node {}",

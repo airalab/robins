@@ -20,7 +20,7 @@ A command-line interface for quick access to CPS pallet functionality.
 - ⚙️ **Flexible configuration** via environment variables or CLI args
 - 🔒 **Secure by design** with proper key management and ECDH key agreement
 - 📚 **Comprehensive documentation** for library API
-- 🔧 **Type-safe blockchain integration** via subxt
+- 🔧 **Type-safe CPS 1.0 API**: `NodeId`/`ScopeId` extension traits, opaque `Transaction<T>`, RPC or embedded light client
 - 🎛️ **Feature flags** for flexible dependency management
 
 ## 🏗️ Architecture
@@ -29,20 +29,21 @@ A command-line interface for quick access to CPS pallet functionality.
 ┌────────────────────────────────────────────────────┐
 │                    libcps CLI                      │
 ├────────────────────────────────────────────────────┤
-│      Commands │ Display │ Crypto │ Blockchain       │
+│     Commands │ Display │ Crypto │ Blockchain       │
 └────────────────────────────────────────────────────┘
-           ↓          ↓         ↓         ↓
+         ↓          ↓         ↓         ↓
 ┌────────────────────────────────────────────────────┐
 │                 libcps Library                     │
 ├──────────────┬──────────────┬──────────────────────┤
-│   Cipher     │  Types       │  Generated Runtime   │
-│   - SR25519  │  - BoundedVec│  - subxt codegen     │
-│   - ED25519  │  - NodeId    │  - CPS pallet API    │
+│   Client     │ Node/Scope   │  Crypto              │
+│   - RPC      │ traits       │  - Keypair           │
+│   - light    │ - NodeId     │  - Cipher            │
+│              │ - ScopeId    │                      │
 └──────────────┴──────────────┴──────────────────────┘
       ↓
 ┌─────────────────────┐
-│  Substrate Node     │
-│  - CPS Pallet       │
+│ Robonomics Runtime  │
+│ - CPS Pallet        │
 └─────────────────────┘
 ```
 
@@ -112,7 +113,7 @@ sudo cp target/release/cps /usr/local/bin/
 ### 1. Set up your environment
 
 ```bash
-# Set blockchain endpoint
+# Set blockchain endpoint (optional: without it the embedded light client is used)
 export ROBONOMICS_WS_URL=ws://localhost:9944
 
 # Set your account (development account for testing)
@@ -222,19 +223,6 @@ cps set-payload 5 'encrypted telemetry' --receiver-public <RECEIVER_ADDRESS>
 cps set-payload 5 'encrypted telemetry' --receiver-public <RECEIVER_ADDRESS> --scheme ed25519 --cipher aesgcm256
 ```
 
-### `move <node_id> <new_parent_id>`
-
-Move a node to a new parent.
-
-```bash
-# Move node 5 under node 3
-cps move 5 3
-```
-
-**Features:**
-- Automatic cycle detection (prevents moving a node under its own descendant)
-- Path validation
-
 ### `remove <node_id>`
 
 Delete a node (must have no children).
@@ -252,7 +240,7 @@ cps remove 5 --force
 ### Environment Variables
 
 ```bash
-# Blockchain connection
+# Blockchain connection (omit to start the embedded light client)
 export ROBONOMICS_WS_URL=ws://localhost:9944
 
 # Account credentials
@@ -271,98 +259,146 @@ cps --ws-url ws://localhost:9944 \
 
 ## 📚 Library Usage
 
-### Quick Start
+### Model
 
-This example shows the core node-oriented operations: creating nodes, setting metadata and payload, and visualizing the tree structure.
+```
+NodeId  + extension traits   node topology, data, scope and access
+ScopeId + extension traits   scope queries
+Client                       connection, queries, transaction submission
+Transaction<T>               opaque prepared CPS transaction
+crypto::Signer<S>            identity tagged by scheme (Sr25519 | Ed25519): signs and encrypts
+```
+
+`NodeId` and `ScopeId` are plain values: they never hold a client, signer or cached state. **Reads** take a `&Client` and run immediately (`async`). **Mutations** only build a `Transaction<T>` (synchronous) and submit nothing; submission is an explicit `Client` call. Subxt is an internal detail: no `subxt` or `subxt-signer` import is needed.
+
+Import the extension traits with `use libcps::prelude::*;`.
+
+### Connecting
 
 ```rust
-use libcps::blockchain::{Client, Config, BoundedVec};
-use libcps::node::Node;
+use libcps::Client;
+
+// Direct RPC connection
+let client = Client::connect(Some("wss://polkadot.rpc.robonomics.network")).await?;
+
+// No URL: start the embedded light client (Polkadot relay chain + Robonomics
+// parachain specs from `robonomics-chain-spec`)
+let client = Client::connect(None).await?;
+```
+
+Both modes expose the same API. `Client::connect_rpc(url)` and `Client::connect_light()` are available as explicit constructors.
+
+### Reading and writing nodes
+
+```rust
+use libcps::{
+    crypto::{Signer, Sr25519},
+    prelude::*,
+    Client, CreateNode, NodeId,
+};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Connect to blockchain
-    let config = Config {
-        ws_url: "ws://localhost:9944".to_string(),
-        suri: Some("//Alice".to_string()),
-    };
-    let client = Client::new(&config).await?;
-    
-    // Create a root node with metadata and payload
-    let meta = BoundedVec(r#"{"type":"building","name":"HQ"}"#.as_bytes().to_vec());
-    let payload = BoundedVec(r#"{"status":"online"}"#.as_bytes().to_vec());
-    let root_node = Node::create(&client, None, Some(meta), Some(payload)).await?;
-    println!("Created root node: {}", root_node.id().0);
-    
+async fn main() -> libcps::Result<()> {
+    let keypair = Signer::<Sr25519>::from_suri("//Alice")?;
+    let client = Client::connect(Some("ws://127.0.0.1:9944")).await?;
+
+    // Create a root node; its id is the result of the finalized transaction
+    let tx = libcps::create_root(CreateNode {
+        meta: Some(br#"{"type":"building","name":"HQ"}"#.to_vec()),
+        payload: Some(br#"{"status":"online"}"#.to_vec()),
+    })?;
+    let root: NodeId = client.submit_finalized(&tx, &keypair).await?.result;
+
     // Create a child node
-    let child_meta = BoundedVec(r#"{"type":"room","name":"Server Room"}"#.as_bytes().to_vec());
-    let child_payload = BoundedVec(r#"{"temp":"22C"}"#.as_bytes().to_vec());
-    let child_node = Node::create(&client, Some(root_node.id()), Some(child_meta), Some(child_payload)).await?;
-    println!("Created child node: {}", child_node.id().0);
-    
-    // Update node metadata
-    let new_meta = BoundedVec(r#"{"type":"room","name":"Server Room","updated":true}"#.as_bytes().to_vec());
-    child_node.set_meta(Some(new_meta)).await?;
-    
-    // Update node payload
-    let new_payload = BoundedVec(r#"{"temp":"23.5C"}"#.as_bytes().to_vec());
-    child_node.set_payload(Some(new_payload)).await?;
-    
-    // Query and display node information
-    let info = root_node.query().await?;
-    println!("Node {} has {} children", info.id.0, info.children.len());
-    println!("Owned by {} (Scope {})", info.scope.owner, info.scope.id.0);
-    
+    let tx = root.create_child(CreateNode {
+        meta: Some(br#"{"type":"room"}"#.to_vec()),
+        payload: None,
+    })?;
+    let child = client.submit_finalized(&tx, &keypair).await?.result;
+
+    // Update the payload: build, then submit
+    let tx = child.set_payload(br#"{"temp":"23.5C"}"#)?;
+    let receipt = client.submit_finalized(&tx, &keypair).await?;
+    println!("finalized in block {:?}", receipt.block_hash);
+
+    // Reads
+    let payload = child.payload(&client).await?;
+    let children = root.children(&client).await?;
+    println!("{payload:?}, root has {} children", children.len());
     Ok(())
 }
 ```
 
+| Trait | Methods |
+| --- | --- |
+| `NodeRead` | `info`, `meta`, `payload`, `watch_meta`, `watch_payload` |
+| `NodeTree` | `children`, `create_child`, `delete` (and the free function `create_root`) |
+| `NodeWrite` | `set_meta`, `clear_meta`, `set_payload`, `clear_payload` |
+| `NodeScope` | `resolve_scope`, `create_scope` |
+| `NodeAccess` | `has_capability`, `grant`, `revoke` |
+| `ScopeRead` | `info` |
+
+Metadata (1024 bytes) and payload (8192 bytes) are validated when the transaction is built; oversized values fail with `Error::MetaTooLarge` / `Error::PayloadTooLarge` before anything is sent.
+
+`Client::submit` signs and submits without waiting and returns a `PendingTransaction<T>` (`wait_finalized()` completes it); `Client::submit_finalized` waits for finalization and successful execution and returns a `TxReceipt<T>` with `extrinsic_hash`, `block_hash` and `result` (`NodeId` for node creation, `ScopeId` for scope creation, `()` otherwise).
+
 ### Scopes and Access Control
 
-Ownership belongs to a *Scope*, not to a node. A Scope is rooted at a node and owned by one account; nodes without their own Scope resolve to the Scope of their nearest ancestor that has one. `NodeInfo::scope` carries the resolved Scope (id, root node and owner).
+Ownership belongs to a *Scope*, not to a node. A Scope is rooted at a node and owned by one account; nodes without their own Scope resolve to the Scope of their nearest ancestor that has one.
 
-The library does not reimplement Scope resolution or authorization. It calls the runtime's `CpsApi` (`resolve_scope`, `has_capability`) and leaves authorization of every mutation to the runtime, so a rejected transaction surfaces as an error.
+The library does not reimplement Scope resolution or authorization. It calls the runtime's `CpsApi` (`resolve_scope`, `has_capability`) and leaves authorization of every mutation to the runtime, so a rejected transaction surfaces as an error (`Error::AccessDenied` for authorization failures).
 
 ```rust
-use libcps::node::{Capability, GrantMode};
+use libcps::{prelude::*, Access, Capability};
 
-// Resolved Scope of a node, now or at a historical block
-let scope = node.resolve_scope().await?;
-let scope_then = node.resolve_scope_at(block_hash).await?;
+// Scope of a node (a snapshot value) and the scope record
+let resolved = node.resolve_scope(&client).await?;
+let scope_info = resolved.id.info(&client).await?;
 
 // Make the node the root of a new nested Scope. On an existing Scope root
 // this replaces the Scope with a fresh ScopeId, which is how ownership changes.
-node.create_scope().await?;
+let scope_id = client
+    .submit_finalized(&node.create_scope(), &keypair)
+    .await?
+    .result;
 
 // Let `bob` write to this node and its descendants in the same Scope
-node.grant_access(bob, Capability::Write, GrantMode::Subtree).await?;
-assert!(node.has_capability(bob, Capability::Write).await?);
+client
+    .submit_finalized(&node.grant(bob, Access::write_subtree())?, &keypair)
+    .await?;
+assert!(node.has_capability(&client, &bob, Capability::Write).await?);
 
-node.revoke_access(bob, Capability::Write).await?;
+client
+    .submit_finalized(&node.revoke(bob, Capability::Write)?, &keypair)
+    .await?;
 ```
 
-- `Node::query_at(block_hash)` reads topology, meta, payload, children and the resolved Scope from the same block; `Node::query()` uses the latest finalized block.
-- Meta and payload have separate runtime size limits; oversized values are rejected by the runtime.
-- Nodes can no longer be moved (`Node::move_to` was removed), and a Scope is deleted only together with its root node.
+- Reads use the latest finalized block.
+- Nodes cannot be moved, and a Scope is deleted only together with its root node.
 
 > **Note:** The published runtime metadata does not describe the `CpsApi` runtime API, so libcps calls `CpsApi_resolve_scope` and `CpsApi_has_capability` by name and decodes the SCALE result itself.
 
-### Data Types
+### Signing and encryption
+
+A `crypto::Signer<S>` is the account identity, tagged with its scheme: `S` is `crypto::Sr25519` (default) or `crypto::Ed25519`. It signs transactions (`Client::submit` takes `&Signer<S>`; it implements the Subxt signer interface internally) and implements `Cipher` (built on `SharedSecret`) for encryption. The receiver's `crypto::PublicKey<S>` carries the same tag, so a key of another scheme cannot be mixed in; that is a compile error. The two purposes stay separate; transactions are signed only with the asymmetric signing key, never with ECDH/HKDF/AEAD output.
+
+libcps has no runtime scheme selector. An application that picks the scheme at runtime (like the `cps` CLI with its `--scheme` flag) instantiates generic code per scheme itself, for example `fn run<S: Scheme>(..)` called once with `Sr25519` and once with `Ed25519`.
 
 ```rust
-use libcps::blockchain::BoundedVec;
-use libcps::node::NodeId;
-use libcps::crypto::EncryptionAlgorithm;
+use libcps::crypto::{Cipher, EncryptionAlgorithm, PublicKey, Signer, Sr25519};
 
-// Create plain data (unencrypted)
-let meta = BoundedVec("sensor config".as_bytes().to_vec());
-let meta_bytes = BoundedVec(vec![1, 2, 3]);
+let signer = Signer::<Sr25519>::from_suri("//Alice")?;
 
-// Create encrypted data from cipher output
-let encrypted_msg = cipher.encrypt(plaintext, &receiver_public, EncryptionAlgorithm::XChaCha20Poly1305)?;
-let encrypted_bytes = encrypted_msg.encode();
-let payload = BoundedVec(encrypted_bytes);
+// ED25519 works the same way: `Signer::<Ed25519>::from_suri("//Alice")`
+// (the on-chain account is the ED25519 public key)
+
+// Encrypt for a receiver and store the encrypted message as node payload
+let receiver_public = PublicKey::<Sr25519>::from(receiver_public_bytes);
+let message = signer.encrypt(b"secret", &receiver_public, EncryptionAlgorithm::XChaCha20Poly1305)?;
+let tx = node.set_payload(parity_scale_codec::Encode::encode(&message))?;
+client.submit_finalized(&tx, &signer).await?;
 ```
+
 
 ## 🔐 Encryption
 
@@ -538,21 +574,27 @@ tools/libcps/
 └── src/
     ├── lib.rs            # Library entry point with module exports
     ├── main.rs           # CLI entry point
-    ├── node.rs           # Node-oriented API with CPS type definitions
-    ├── blockchain/       # Blockchain client and connection
-    │   ├── mod.rs
-    │   └── client.rs
+    ├── client.rs         # Client: RPC/light-client connection, submission
+    ├── transaction.rs    # Opaque Transaction<T>, size validation
+    ├── types.rs          # NodeId, ScopeId, Access, ResolvedScope, ...
+    ├── error.rs          # libcps::Error
+    ├── prelude.rs        # Extension traits for `use libcps::prelude::*`
+    ├── node/             # NodeRead, NodeTree, NodeWrite, NodeScope, NodeAccess
+    ├── scope/            # ScopeRead
+    ├── backend/          # Private Subxt backend (RPC, light client, signer adapter)
     ├── commands/         # CLI command implementations
     │   ├── mod.rs
     │   ├── show.rs
     │   ├── create.rs
     │   ├── set_meta.rs
     │   ├── set_payload.rs
-    │   ├── move_node.rs
     │   └── remove.rs
     ├── crypto/           # Encryption utilities
     │   ├── mod.rs        # Documentation and re-exports
-    │   ├── types.rs      # CryptoScheme, EncryptionAlgorithm, EncryptedMessage
+    │   ├── types.rs      # EncryptionAlgorithm, EncryptedMessage
+    │   ├── scheme.rs     # Sr25519 / Ed25519 scheme tags
+    │   ├── signer.rs     # Signer<S>, PublicKey<S>
+    │   ├── shared_secret.rs # ECDH key agreement
     │   └── cipher.rs     # Cipher implementation
     └── display/          # Pretty CLI output
         ├── mod.rs

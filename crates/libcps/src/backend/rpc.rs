@@ -15,9 +15,14 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Blockchain client and connection management.
+//! Direct RPC connection.
 
-pub mod client;
-pub use client::{Client, Config};
+use super::Api;
+use crate::error::{Error, Result};
 
-pub use robonomics_runtime_subxt_api::*;
+/// Connect to a node RPC endpoint (`ws://`, `wss://`).
+pub(crate) async fn connect_rpc(url: &str) -> Result<Api> {
+    Api::from_url(url)
+        .await
+        .map_err(|e| Error::Connection(Box::new(e)))
+}

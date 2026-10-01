@@ -86,11 +86,11 @@
 //! ## Programmatic Usage
 //!
 //! ```no_run
-//! use libcps::blockchain;
+//! use mqtt_bridge::BlockchainConfig;
 //! use mqtt_bridge as mqtt;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let blockchain_config = blockchain::Config {
+//! let blockchain_config = BlockchainConfig {
 //!     ws_url: "ws://localhost:9944".to_string(),
 //!     suri: Some("//Alice".to_string()),
 //! };
@@ -108,7 +108,7 @@
 //! // Subscribe: MQTT -> Blockchain
 //! mqtt_config.subscribe(
 //!     &blockchain_config,
-//!     None,
+//!     None::<&libcps::crypto::Signer<libcps::crypto::Sr25519>>,
 //!     "sensors/temp",
 //!     1,
 //!     None,
@@ -119,7 +119,7 @@
 //! // Publish: Blockchain -> MQTT
 //! mqtt_config.publish(
 //!     &blockchain_config,
-//!     None,
+//!     None::<&libcps::crypto::Signer<libcps::crypto::Sr25519>>,
 //!     "actuators/status",
 //!     1,
 //!     None,
@@ -146,16 +146,17 @@
 //! ```
 
 use anyhow::{anyhow, Result};
-use libcps::blockchain::{BoundedVec, Client, Config as BlockchainConfig};
-use libcps::crypto::{Cipher, CryptoScheme, EncryptedMessage, EncryptionAlgorithm};
-use libcps::node::{Node, NodeId, PayloadSet};
-use log::{debug, error, trace};
+use libcps::crypto::{
+    Cipher, EncryptedMessage, EncryptionAlgorithm, PublicKey, Scheme, Signer, Sr25519,
+};
+use libcps::{prelude::*, Client, NodeId};
 use parity_scale_codec::Decode;
 use parity_scale_codec::Encode;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tokio::time::{sleep, Duration};
+use tracing::{debug, error, trace};
 
 /// Configuration for a subscribe topic
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -191,6 +192,15 @@ pub struct PublishConfig {
 // Helper for serde skip_serializing_if
 fn is_false(b: &bool) -> bool {
     !b
+}
+
+/// Blockchain connection settings used by the bridge functions.
+#[derive(Clone, Debug)]
+pub struct BlockchainConfig {
+    /// WebSocket URL of the node RPC endpoint
+    pub ws_url: String,
+    /// Account secret URI (e.g., //Alice or seed phrase)
+    pub suri: Option<String>,
 }
 
 /// Blockchain connection configuration
@@ -342,7 +352,7 @@ impl Config {
                 };
 
                 // Create cipher if encryption is requested
-                let (cipher, algorithm_opt) = if receiver_public.is_some() {
+                let (scheme, algorithm_opt) = if receiver_public.is_some() {
                     debug!(
                         "Creating cipher with algorithm={}, scheme={}",
                         cipher_name, scheme_name
@@ -351,28 +361,36 @@ impl Config {
                         .map_err(|e| anyhow!("Invalid cipher '{}': {}", cipher_name, e))?;
                     let scheme = CryptoScheme::from_str(&scheme_name)
                         .map_err(|e| anyhow!("Invalid scheme '{}': {}", scheme_name, e))?;
-                    let suri = blockchain_cfg
-                        .suri
-                        .clone()
-                        .ok_or_else(|| anyhow!("SURI required for encryption"))?;
-                    (Some(Cipher::new(suri, scheme)?), Some(algorithm))
+                    (scheme, Some(algorithm))
                 } else {
                     trace!("No encryption configured for this subscription");
-                    (None, None)
+                    (CryptoScheme::Sr25519, None)
                 };
 
                 // Start subscribe bridge
-                mqtt_cfg
-                    .subscribe(
-                        &blockchain_cfg,
-                        cipher.as_ref(),
-                        &topic,
-                        node_id,
-                        receiver_pub_bytes,
-                        algorithm_opt,
-                        None, // No custom message handler
-                    )
-                    .await
+                crate::with_scheme!(scheme, S => {
+                    let cipher: Option<Signer<S>> = if receiver_public.is_some() {
+                        let suri = blockchain_cfg
+                            .suri
+                            .clone()
+                            .ok_or_else(|| anyhow!("SURI required for encryption"))?;
+                        Some(Signer::from_suri(&suri)?)
+                    } else {
+                        None
+                    };
+
+                    mqtt_cfg
+                        .subscribe(
+                            &blockchain_cfg,
+                            cipher.as_ref(),
+                            &topic,
+                            node_id,
+                            receiver_pub_bytes,
+                            algorithm_opt,
+                            None, // No custom message handler
+                        )
+                        .await
+                })
             });
 
             tasks.push(task);
@@ -390,14 +408,14 @@ impl Config {
                 // Create cipher for decryption if requested
                 // Note: Algorithm and scheme are auto-detected from encrypted data
                 // We only need our private key (SURI) to create the Cipher
-                let cipher = if should_decrypt {
+                let cipher: Option<Signer<Sr25519>> = if should_decrypt {
                     let suri = blockchain_cfg
                         .suri
                         .clone()
                         .ok_or_else(|| anyhow!("SURI required for decryption"))?;
                     // Use default scheme (SR25519) for Cipher creation
                     // The actual algorithm used will be read from the encrypted message
-                    Some(Cipher::new(suri, CryptoScheme::Sr25519)?)
+                    Some(Signer::from_suri(&suri)?)
                 } else {
                     None
                 };
@@ -451,10 +469,10 @@ impl Config {
     /// # Examples
     ///
     /// ```no_run
-    /// # use libcps::blockchain::Config;
+    /// # use mqtt_bridge::BlockchainConfig;
     /// # use mqtt_bridge as mqtt;
     /// # async fn example() -> anyhow::Result<()> {
-    /// let blockchain_config = Config {
+    /// let blockchain_config = BlockchainConfig {
     ///     ws_url: "ws://localhost:9944".to_string(),
     ///     suri: Some("//Alice".to_string()),
     /// };
@@ -471,7 +489,7 @@ impl Config {
     ///
     /// mqtt_config.subscribe(
     ///     &blockchain_config,
-    ///     None,
+    ///     None::<&libcps::crypto::Signer<libcps::crypto::Sr25519>>,
     ///     "sensors/temp",
     ///     1,
     ///     None,
@@ -481,10 +499,10 @@ impl Config {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn subscribe(
+    pub async fn subscribe<S: Scheme>(
         &self,
         blockchain_config: &BlockchainConfig,
-        cipher: Option<&Cipher>,
+        cipher: Option<&Signer<S>>,
         topic: &str,
         node_id: u64,
         receiver_public: Option<[u8; 32]>,
@@ -503,8 +521,8 @@ impl Config {
 
         // Connect to blockchain
         trace!("Connecting to blockchain at {}", blockchain_config.ws_url);
-        let client = Client::new(blockchain_config).await?;
-        let _keypair = client.require_keypair()?;
+        let client = Client::connect(Some(&blockchain_config.ws_url)).await?;
+        let signer = signer(blockchain_config)?;
         debug!("Connected to blockchain successfully");
 
         // Parse MQTT broker URL
@@ -535,8 +553,7 @@ impl Config {
             .await
             .map_err(|e| anyhow!("Failed to subscribe to topic: {}", e))?;
 
-        // Create Node handle for updates
-        let node = Node::new(&client, NodeId(node_id));
+        let node = NodeId::from(node_id);
 
         // Process MQTT events
         debug!("Starting MQTT event loop for topic '{}'", topic);
@@ -558,7 +575,8 @@ impl Config {
                     let node_data = match (receiver_public.as_ref(), cipher, algorithm) {
                         (Some(receiver_pub), Some(cipher), Some(algorithm)) => {
                             debug!("Encrypting message with {:?} algorithm", algorithm);
-                            match cipher.encrypt(&publish.payload, receiver_pub, algorithm) {
+                            let receiver = PublicKey::<S>::from(*receiver_pub);
+                            match cipher.encrypt(&publish.payload, &receiver, algorithm) {
                                 Ok(encrypted_message) => {
                                     let encrypted_bytes = encrypted_message.encode();
                                     trace!(
@@ -566,7 +584,7 @@ impl Config {
                                         publish.payload.len(),
                                         encrypted_bytes.len()
                                     );
-                                    BoundedVec(encrypted_bytes)
+                                    encrypted_bytes
                                 }
                                 Err(e) => {
                                     // Encryption failed, log error and continue
@@ -582,13 +600,17 @@ impl Config {
                         _ => {
                             let payload_str = String::from_utf8_lossy(&publish.payload);
                             trace!("Using plaintext payload");
-                            BoundedVec(payload_str.as_bytes().to_vec())
+                            payload_str.as_bytes().to_vec()
                         }
                     };
 
                     // Update node payload on blockchain
                     debug!("Updating node {} payload on blockchain", node_id);
-                    if let Err(e) = node.set_payload(Some(node_data)).await {
+                    let submitted = match node.set_payload(node_data) {
+                        Ok(tx) => client.submit_finalized(&tx, &signer).await.map(|_| ()),
+                        Err(e) => Err(e),
+                    };
+                    if let Err(e) = submitted {
                         // Blockchain update failed, log error and continue
                         error!("Failed to update node payload: {}", e);
                     } else {
@@ -635,10 +657,10 @@ impl Config {
     /// # Examples
     ///
     /// ```no_run
-    /// # use libcps::blockchain::Config;
+    /// # use mqtt_bridge::BlockchainConfig;
     /// # use mqtt_bridge as mqtt;
     /// # async fn example() -> anyhow::Result<()> {
-    /// let blockchain_config = Config {
+    /// let blockchain_config = BlockchainConfig {
     ///     ws_url: "ws://localhost:9944".to_string(),
     ///     suri: Some("//Alice".to_string()),
     /// };
@@ -655,7 +677,7 @@ impl Config {
     ///
     /// mqtt_config.publish(
     ///     &blockchain_config,
-    ///     None,  // Optional cipher for decryption
+    ///     None::<&libcps::crypto::Signer<libcps::crypto::Sr25519>>,  // Optional cipher for decryption
     ///     "actuators/status",
     ///     1,
     ///     None,
@@ -663,16 +685,16 @@ impl Config {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn publish(
+    pub async fn publish<S: Scheme>(
         &self,
         blockchain_config: &BlockchainConfig,
-        cipher: Option<&Cipher>,
+        cipher: Option<&Signer<S>>,
         topic: &str,
         node_id: u64,
         publish_handler: Option<PublishHandler>,
     ) -> Result<()> {
         // Connect to blockchain
-        let client = Client::new(blockchain_config).await?;
+        let client = Client::connect(Some(&blockchain_config.ws_url)).await?;
 
         // Parse MQTT broker URL
         let (host, port) = parse_mqtt_url(&self.broker)?;
@@ -715,13 +737,12 @@ impl Config {
             }
         });
 
-        // Create Node handle for querying
-        let node = Node::new(&client, NodeId(node_id));
+        let node = NodeId::from(node_id);
 
         // Create node decrypt closure
-        let node_data_to_string = |node_data: BoundedVec<u8>| {
+        let node_data_to_string = |node_data: Vec<u8>| {
             // Try to decode as EncryptedMessage first
-            if let Ok(message) = EncryptedMessage::decode(&mut node_data.0.as_slice()) {
+            if let Ok(message) = EncryptedMessage::decode(&mut node_data.as_slice()) {
                 if let Some(cipher) = cipher {
                     let decrypted = cipher.decrypt(&message, None).map_err(|e| {
                         error!("Failed to decrypt message: {}", e);
@@ -739,90 +760,45 @@ impl Config {
                 }
             } else {
                 // Treat as plain data
-                String::from_utf8(node_data.0).map_err(|e| {
+                String::from_utf8(node_data).map_err(|e| {
                     error!("Invalid UTF-8 character: {}", e);
                     anyhow!("Invalid UTF-8 character: {}", e)
                 })
             }
         };
 
-        // Subscribe to finalized blocks
-        let mut blocks_sub = client
-            .api
-            .stream_blocks()
+        // Subscribe to payload updates of the node in finalized blocks
+        let mut watcher = node
+            .watch_payload(&client)
             .await
             .map_err(|e| anyhow!("Failed to subscribe to finalized blocks: {}", e))?;
 
-        // Monitor each block for PayloadSet events
-        while let Some(block_result) = blocks_sub.next().await {
-            let block = match block_result {
-                Ok(b) => b,
+        while let Some(update) = watcher.next().await {
+            let update = match update {
+                Ok(update) => update,
                 Err(_e) => {
+                    // Failed to process a block, skip
                     continue;
                 }
             };
 
-            let block_at = match block.at().await {
-                Ok(b) => b,
-                Err(_e) => {
-                    continue;
-                }
-            };
-
-            // Check events in this block for PayloadSet events related to our node
-            let events = match block_at.events().fetch().await {
-                Ok(e) => e,
-                Err(_e) => {
-                    continue;
-                }
-            };
-
-            // Look for PayloadSet events for our node
-            let payload_set_events = events.find::<PayloadSet>();
-
-            let mut payload_updated = false;
-            for event in payload_set_events {
-                match event {
-                    Ok(payload_event) => {
-                        // Check if this event is for our node
-                        if payload_event.0 .0 == node_id {
-                            payload_updated = true;
-                            break;
-                        }
-                    }
-                    Err(_e) => {
-                        // Failed to decode event, skip
-                    }
-                }
-            }
-
-            // Only query and publish if the payload was actually updated
-            if payload_updated {
-                match node.query_at(block.hash()).await {
-                    Ok(node_info) => {
-                        if let Some(payload) = node_info.payload {
-                            // Extract or decrypt the data
-                            if let Ok(data) = node_data_to_string(payload) {
-                                // Publish to MQTT
-                                match mqtt_client
-                                    .publish(topic, QoS::AtMostOnce, false, data.as_bytes())
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        // Call publish handler if provided
-                                        if let Some(ref handler) = publish_handler {
-                                            handler(topic, block.number(), &data);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to publish to MQTT: {}", e);
-                                    }
-                                }
+            if let Some(payload) = update.payload {
+                // Extract or decrypt the data
+                if let Ok(data) = node_data_to_string(payload) {
+                    // Publish to MQTT
+                    match mqtt_client
+                        .publish(topic, QoS::AtMostOnce, false, data.as_bytes())
+                        .await
+                    {
+                        Ok(_) => {
+                            // Call publish handler if provided
+                            if let Some(ref handler) = publish_handler {
+                                handler(topic, update.block_number, &data);
                             }
                         }
-                    }
-                    Err(_e) => {
-                        // Failed to query node, skip
+                        Err(e) => {
+                            error!("Failed to publish to MQTT: {}", e);
+                        }
                     }
                 }
             }
@@ -845,11 +821,11 @@ const MQTT_RECONNECT_DELAY_SECS: u64 = 5;
 ///
 /// Supports both SS58 addresses and hex-encoded 32-byte keys.
 fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
+    use libcps::AccountId;
     use std::str::FromStr;
-    use subxt::utils::AccountId32;
 
-    // Try SS58 decoding with AccountId32 (works for both Sr25519 and Ed25519)
-    if let Ok(account_id) = AccountId32::from_str(addr_or_hex) {
+    // Try SS58 decoding with AccountId (works for both Sr25519 and Ed25519)
+    if let Ok(account_id) = AccountId::from_str(addr_or_hex) {
         return Ok(account_id.0);
     }
 
@@ -922,3 +898,56 @@ pub type MessageHandler = Box<dyn Fn(&str, &[u8]) + Send + Sync>;
 ///
 /// Arguments: (topic, block_number, data)
 pub type PublishHandler = Box<dyn Fn(&str, u64, &str) + Send + Sync>;
+
+/// Transaction signer from the configured SURI.
+fn signer(config: &BlockchainConfig) -> Result<Signer<Sr25519>> {
+    let suri = config
+        .suri
+        .as_deref()
+        .ok_or_else(|| anyhow!("This operation requires an account. Please provide a SURI."))?;
+    Ok(Signer::from_suri(suri)?)
+}
+
+/// Cryptographic scheme of the encryption keypair, selected by name in the
+/// command line and in configuration files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CryptoScheme {
+    /// Schnorrkel SR25519 keys (Substrate native)
+    Sr25519,
+    /// ED25519 keys (IoT, Home Assistant)
+    Ed25519,
+}
+
+impl FromStr for CryptoScheme {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "sr25519" | "sr" => Ok(Self::Sr25519),
+            "ed25519" | "ed" => Ok(Self::Ed25519),
+            _ => Err(anyhow!(
+                "Invalid cryptographic scheme: '{s}'. Supported: sr25519, ed25519"
+            )),
+        }
+    }
+}
+
+/// Run `$body` with `$scheme_ty` aliased to the `libcps` scheme marker type of a
+/// [`CryptoScheme`], so generic code is instantiated for the scheme chosen at
+/// runtime.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! with_scheme {
+    ($scheme:expr, $scheme_ty:ident => $body:expr) => {
+        match $scheme {
+            $crate::CryptoScheme::Sr25519 => {
+                type $scheme_ty = $crate::__libcps::crypto::Sr25519;
+                $body
+            }
+            $crate::CryptoScheme::Ed25519 => {
+                type $scheme_ty = $crate::__libcps::crypto::Ed25519;
+                $body
+            }
+        }
+    };
+}

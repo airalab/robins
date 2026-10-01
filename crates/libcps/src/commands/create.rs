@@ -15,94 +15,63 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Create command implementation.
+//! Create node command implementation.
 
+use super::{encrypt, Connection};
 use crate::display;
 use anyhow::Result;
 use colored::*;
-use libcps::blockchain::{BoundedVec, Client, Config};
-use libcps::crypto::Cipher;
-use libcps::node::Node;
-use parity_scale_codec::Encode;
-use subxt::utils::AccountId32;
+use libcps::crypto::{EncryptionAlgorithm, Scheme, Signer};
+use libcps::{prelude::*, CreateNode, NodeId};
 
-pub async fn execute(
-    config: &Config,
-    cipher: Option<&Cipher>,
+/// Create a root node (`parent == None`, which starts a new scope owned by the
+/// signer) or a child node.
+///
+/// Metadata and payload are encrypted with `cipher` for `receiver_public` when a
+/// receiver is given.
+pub async fn execute<S: Scheme>(
+    connection: &Connection,
+    cipher: Option<&Signer<S>>,
     parent: Option<u64>,
     meta: Option<String>,
     payload: Option<String>,
     receiver_public: Option<[u8; 32]>,
-    algorithm: Option<libcps::crypto::EncryptionAlgorithm>,
+    algorithm: Option<EncryptionAlgorithm>,
 ) -> Result<()> {
-    display::progress("Connecting to blockchain...");
+    let client = connection.client().await?;
+    let signer = connection.signer()?;
 
-    let client = Client::new(config).await?;
-    let keypair = client.require_keypair()?;
-
-    display::info(&format!("Connected to {}", config.ws_url));
-    let account_id = AccountId32::from(keypair.public_key().0);
-    display::info(&format!("Using account: {}", account_id));
-
-    if parent.is_some() {
-        display::info(&format!(
-            "Creating child node under parent {}",
-            parent.unwrap()
-        ));
-    } else {
-        display::info("Creating root node");
+    match parent {
+        Some(parent) => display::info(&format!("Creating child node under parent {parent}")),
+        None => display::info("Creating root node"),
     }
 
-    // Convert strings to NodeData, applying encryption if requested
-    let meta_data =
-        if let (Some(receiver_pub), Some(ref m)) = (receiver_public.as_ref(), meta.as_ref()) {
-            let cipher = cipher.ok_or_else(|| anyhow::anyhow!("Cipher required for encryption"))?;
-            let algorithm =
-                algorithm.ok_or_else(|| anyhow::anyhow!("Algorithm required for encryption"))?;
-            display::info(&format!(
-                "[E] Encrypting metadata with {} using {}",
-                algorithm,
-                cipher.scheme()
-            ));
-            let receiver_account = AccountId32::from(*receiver_pub);
-            display::info(&format!("[K] Receiver: {}", receiver_account));
-
-            let encrypted_message = cipher.encrypt(m.as_bytes(), receiver_pub, algorithm)?;
-            let encrypted_bytes = encrypted_message.encode();
-            Some(BoundedVec(encrypted_bytes))
-        } else {
-            meta.map(|m| BoundedVec(m.into_bytes()))
-        };
-
-    let payload_data =
-        if let (Some(receiver_pub), Some(ref p)) = (receiver_public.as_ref(), payload.as_ref()) {
-            let cipher = cipher.ok_or_else(|| anyhow::anyhow!("Cipher required for encryption"))?;
-            let algorithm =
-                algorithm.ok_or_else(|| anyhow::anyhow!("Algorithm required for encryption"))?;
-            if meta_data.is_none() {
-                display::info(&format!(
-                    "[E] Encrypting payload with {} using {}",
-                    algorithm,
-                    cipher.scheme()
-                ));
-                let receiver_account = AccountId32::from(*receiver_pub);
-                display::info(&format!("[K] Receiver: {}", receiver_account));
+    let seal = |what: &str, data: Option<String>| -> Result<Option<Vec<u8>>> {
+        match (data, receiver_public.as_ref()) {
+            (Some(data), Some(receiver)) => {
+                encrypt(what, cipher, algorithm, receiver, data.as_bytes()).map(Some)
             }
+            (data, _) => Ok(data.map(String::into_bytes)),
+        }
+    };
+    let params = CreateNode {
+        meta: seal("metadata", meta)?,
+        payload: seal("payload", payload)?,
+    };
 
-            let encrypted_message = cipher.encrypt(p.as_bytes(), receiver_pub, algorithm)?;
-            let encrypted_bytes = encrypted_message.encode();
-            Some(BoundedVec(encrypted_bytes))
-        } else {
-            payload.map(|p| BoundedVec(p.into_bytes()))
-        };
+    let tx = match parent {
+        Some(parent) => NodeId::from(parent).create_child(params)?,
+        None => libcps::create_root(params)?,
+    };
 
     let spinner = display::spinner("Submitting transaction...");
-    let node = Node::create(&client, parent, meta_data, payload_data).await?;
+    let receipt = client.submit_finalized(&tx, &signer).await;
     spinner.finish_and_clear();
+    let receipt = receipt?;
 
     display::success(&format!(
         "Node created with ID: {}",
-        node.id().to_string().bright_cyan()
+        receipt.result.to_string().bright_cyan()
     ));
 
     Ok(())

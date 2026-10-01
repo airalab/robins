@@ -21,24 +21,52 @@
 //! cyber-physical systems on the Robonomics blockchain.
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::str::FromStr;
-use subxt::utils::AccountId32;
 
 // Import from the library
-use libcps::blockchain;
-use libcps::crypto::{Cipher, EncryptionAlgorithm};
+use libcps::crypto::{EncryptionAlgorithm, Scheme, Signer};
+use libcps::AccountId;
 
 // CLI-specific modules (display and commands)
 mod commands;
 mod display;
 
+/// Cryptographic scheme of the encryption keypair (CLI selection only).
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum SchemeArg {
+    /// Schnorrkel SR25519 keys (Substrate native)
+    #[default]
+    #[value(alias = "sr")]
+    Sr25519,
+    /// ED25519 keys (IoT, Home Assistant)
+    #[value(alias = "ed")]
+    Ed25519,
+}
+
+/// Run `$body` with `$keypair` aliased to the scheme marker type of a [`SchemeArg`], so
+/// generic code is instantiated for the scheme chosen at runtime.
+macro_rules! with_scheme {
+    ($scheme:expr, $keypair:ident => $body:expr) => {
+        match $scheme {
+            SchemeArg::Sr25519 => {
+                type $keypair = libcps::crypto::Sr25519;
+                $body
+            }
+            SchemeArg::Ed25519 => {
+                type $keypair = libcps::crypto::Ed25519;
+                $body
+            }
+        }
+    };
+}
+
 /// Parses a receiver public key from either an SS58 address or a hex-encoded 32-byte key.
 ///
 /// # Supported formats
 /// - **SS58 address**: A valid Substrate SS58-encoded account ID. Decoding is attempted first
-///   using subxt's `AccountId32::from_str`, which supports both Sr25519 and
-///   Ed25519 (they share the same 32-byte public key length).
+///   using `AccountId::from_str`, which works for both SR25519 and ED25519 accounts
+///   (they share the same 32-byte public key length).
 /// - **Hex string**: A 64-hex-character string representing a 32-byte public key. An optional
 ///   `0x` prefix is allowed (e.g. `0xdeadbeef...` or `deadbeef...`).
 ///
@@ -53,8 +81,8 @@ mod display;
 /// - Returns an error if the hex decoding succeeds but the resulting byte length is not
 ///   exactly 32 bytes.
 fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
-    // Try SS58 decoding with AccountId32 (works for both Sr25519 and Ed25519)
-    if let Ok(account_id) = AccountId32::from_str(addr_or_hex) {
+    // Try SS58 decoding with AccountId (works for both Sr25519 and Ed25519)
+    if let Ok(account_id) = AccountId::from_str(addr_or_hex) {
         return Ok(account_id.0);
     }
 
@@ -93,15 +121,17 @@ fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
 ╚══════════════════════════════════════════════════════╝
 "#)]
 struct Cli {
-    /// WebSocket URL for blockchain connection
-    #[arg(long, env = "ROBONOMICS_WS_URL", default_value = "ws://localhost:9944")]
-    ws_url: String,
+    /// WebSocket URL of a node RPC endpoint; an embedded light client is used when omitted
+    #[arg(long, env = "ROBONOMICS_WS_URL")]
+    ws_url: Option<String>,
 
-    /// Account secret URI (e.g., //Alice, //Bob, or seed phrase)
+    /// Account secret URI (e.g., //Alice, //Bob, or seed phrase). Signs transactions
+    /// (SR25519) and is the key for encryption and decryption
     #[arg(long, env = "ROBONOMICS_SURI")]
     suri: Option<String>,
 
-    /// Logging level (off, error, warn, info, debug, trace)
+    /// Log filter: a level (off, error, warn, info, debug, trace) or tracing
+    /// directives such as `info,subxt=warn`
     #[arg(short = 'l', long, env = "RUST_LOG", default_value = "warn")]
     log_level: String,
 
@@ -134,8 +164,8 @@ EXAMPLES:
         decrypt: bool,
 
         /// Cryptographic scheme for decryption (sr25519, ed25519)
-        #[arg(long, default_value = "sr25519", value_parser = clap::value_parser!(libcps::crypto::CryptoScheme))]
-        scheme: libcps::crypto::CryptoScheme,
+        #[arg(long, value_enum, ignore_case = true, default_value_t = SchemeArg::Sr25519)]
+        scheme: SchemeArg,
     },
 
     /// Create a new node (root or child)
@@ -184,8 +214,8 @@ EXAMPLES:
         cipher: String,
 
         /// Cryptographic scheme for encryption (sr25519, ed25519)
-        #[arg(long, default_value = "sr25519", value_parser = clap::value_parser!(libcps::crypto::CryptoScheme))]
-        scheme: libcps::crypto::CryptoScheme,
+        #[arg(long, value_enum, ignore_case = true, default_value_t = SchemeArg::Sr25519)]
+        scheme: SchemeArg,
     },
 
     /// Update node metadata
@@ -220,8 +250,8 @@ EXAMPLES:
         cipher: String,
 
         /// Cryptographic scheme for encryption (sr25519, ed25519)
-        #[arg(long, default_value = "sr25519", value_parser = clap::value_parser!(libcps::crypto::CryptoScheme))]
-        scheme: libcps::crypto::CryptoScheme,
+        #[arg(long, value_enum, ignore_case = true, default_value_t = SchemeArg::Sr25519)]
+        scheme: SchemeArg,
     },
 
     /// Update node payload
@@ -256,26 +286,8 @@ EXAMPLES:
         cipher: String,
 
         /// Cryptographic scheme for encryption (sr25519, ed25519)
-        #[arg(long, default_value = "sr25519", value_parser = clap::value_parser!(libcps::crypto::CryptoScheme))]
-        scheme: libcps::crypto::CryptoScheme,
-    },
-
-    /// Move a node to a new parent
-    #[command(long_about = "Move a node to a new parent.
-
-EXAMPLES:
-    # Move node 5 under node 3
-    cps move 5 3
-
-FEATURES:
-    - Automatic cycle detection (prevents moving a node under its own descendant)
-    - Path validation")]
-    Move {
-        /// Node ID to move
-        node_id: u64,
-
-        /// New parent node ID
-        new_parent_id: u64,
+        #[arg(long, value_enum, ignore_case = true, default_value_t = SchemeArg::Sr25519)]
+        scheme: SchemeArg,
     },
 
     /// Delete a node (must have no children)
@@ -302,12 +314,16 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging
-    std::env::set_var("RUST_LOG", &cli.log_level);
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_new(&cli.log_level)
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
 
-    // Create blockchain config (crypto-free)
-    let blockchain_config = blockchain::Config {
-        ws_url: cli.ws_url.clone(),
+    let connection = commands::Connection {
+        url: cli.ws_url.clone(),
         suri: cli.suri.clone(),
     };
 
@@ -318,16 +334,11 @@ async fn main() -> Result<()> {
             decrypt,
             scheme,
         } => {
-            // Create cipher if decryption is requested
-            let cipher = if decrypt {
-                let suri = cli
-                    .suri
-                    .ok_or_else(|| anyhow::anyhow!("SURI required for decryption"))?;
-                Some(Cipher::new(suri, scheme)?)
-            } else {
-                None
-            };
-            commands::show::execute(&blockchain_config, cipher.as_ref(), node_id).await?;
+            with_scheme!(scheme, P => {
+                // Create keypair if decryption is requested
+                let cipher = cipher_keypair::<P>(&cli.suri, decrypt, "decryption")?;
+                commands::show::execute(&connection, cipher.as_ref(), node_id).await?
+            });
         }
         Commands::Create {
             parent,
@@ -338,36 +349,30 @@ async fn main() -> Result<()> {
             scheme,
         } => {
             // Parse receiver public key if provided (supports both SS58 address and hex)
-            let receiver_pub_bytes = if let Some(ref addr_or_hex) = receiver_public {
-                Some(parse_receiver_public_key(addr_or_hex)?)
-            } else {
-                None
-            };
+            let receiver_pub_bytes = receiver_public
+                .as_deref()
+                .map(parse_receiver_public_key)
+                .transpose()?;
 
             // Encryption requires BOTH sender SURI and receiver public key.
             // - SURI (sender's seed phrase): Used to derive the sender's keypair for ECDH
             // - receiver_public: The recipient's public key for deriving the shared secret
             // If receiver_public is None, data will be stored as plaintext (no encryption).
-            let (cipher_opt, algorithm_opt) = if receiver_public.is_some() {
-                let algorithm = libcps::crypto::EncryptionAlgorithm::from_str(&cipher)
-                    .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))?;
-                let suri = cli
-                    .suri
-                    .ok_or_else(|| anyhow::anyhow!("SURI required for encryption"))?;
-                (Some(Cipher::new(suri, scheme)?), Some(algorithm))
-            } else {
-                (None, None)
-            };
-            commands::create::execute(
-                &blockchain_config,
-                cipher_opt.as_ref(),
-                parent,
-                meta,
-                payload,
-                receiver_pub_bytes,
-                algorithm_opt,
-            )
-            .await?;
+            let algorithm_opt = parse_algorithm(receiver_public.is_some(), &cipher)?;
+            with_scheme!(scheme, P => {
+                let keypair =
+                    cipher_keypair::<P>(&cli.suri, receiver_public.is_some(), "encryption")?;
+                commands::create::execute(
+                    &connection,
+                    keypair.as_ref(),
+                    parent,
+                    meta,
+                    payload,
+                    receiver_pub_bytes,
+                    algorithm_opt,
+                )
+                .await?
+            });
         }
         Commands::SetMeta {
             node_id,
@@ -376,33 +381,24 @@ async fn main() -> Result<()> {
             cipher,
             scheme,
         } => {
-            // Parse receiver public key if provided (supports both SS58 address and hex)
-            let receiver_pub_bytes = if let Some(ref addr_or_hex) = receiver_public {
-                Some(parse_receiver_public_key(addr_or_hex)?)
-            } else {
-                None
-            };
-
-            // Create cipher if encryption is requested
-            let (cipher_opt, algorithm_opt) = if receiver_public.is_some() {
-                let algorithm = EncryptionAlgorithm::from_str(&cipher)
-                    .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))?;
-                let suri = cli
-                    .suri
-                    .ok_or_else(|| anyhow::anyhow!("SURI required for encryption"))?;
-                (Some(Cipher::new(suri, scheme)?), Some(algorithm))
-            } else {
-                (None, None)
-            };
-            commands::set_meta::execute(
-                &blockchain_config,
-                cipher_opt.as_ref(),
-                node_id,
-                data,
-                receiver_pub_bytes,
-                algorithm_opt,
-            )
-            .await?;
+            let receiver_pub_bytes = receiver_public
+                .as_deref()
+                .map(parse_receiver_public_key)
+                .transpose()?;
+            let algorithm_opt = parse_algorithm(receiver_public.is_some(), &cipher)?;
+            with_scheme!(scheme, P => {
+                let keypair =
+                    cipher_keypair::<P>(&cli.suri, receiver_public.is_some(), "encryption")?;
+                commands::set_meta::execute(
+                    &connection,
+                    keypair.as_ref(),
+                    node_id,
+                    data,
+                    receiver_pub_bytes,
+                    algorithm_opt,
+                )
+                .await?
+            });
         }
         Commands::SetPayload {
             node_id,
@@ -411,44 +407,55 @@ async fn main() -> Result<()> {
             cipher,
             scheme,
         } => {
-            // Parse receiver public key if provided (supports both SS58 address and hex)
-            let receiver_pub_bytes = if let Some(ref addr_or_hex) = receiver_public {
-                Some(parse_receiver_public_key(addr_or_hex)?)
-            } else {
-                None
-            };
-
-            // Create cipher if encryption is requested
-            let (cipher_opt, algorithm_opt) = if receiver_public.is_some() {
-                let algorithm = EncryptionAlgorithm::from_str(&cipher)
-                    .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))?;
-                let suri = cli
-                    .suri
-                    .ok_or_else(|| anyhow::anyhow!("SURI required for encryption"))?;
-                (Some(Cipher::new(suri, scheme)?), Some(algorithm))
-            } else {
-                (None, None)
-            };
-            commands::set_payload::execute(
-                &blockchain_config,
-                cipher_opt.as_ref(),
-                node_id,
-                data,
-                receiver_pub_bytes,
-                algorithm_opt,
-            )
-            .await?;
-        }
-        Commands::Move {
-            node_id,
-            new_parent_id,
-        } => {
-            commands::move_node::execute(&blockchain_config, node_id, new_parent_id).await?;
+            let receiver_pub_bytes = receiver_public
+                .as_deref()
+                .map(parse_receiver_public_key)
+                .transpose()?;
+            let algorithm_opt = parse_algorithm(receiver_public.is_some(), &cipher)?;
+            with_scheme!(scheme, P => {
+                let keypair =
+                    cipher_keypair::<P>(&cli.suri, receiver_public.is_some(), "encryption")?;
+                commands::set_payload::execute(
+                    &connection,
+                    keypair.as_ref(),
+                    node_id,
+                    data,
+                    receiver_pub_bytes,
+                    algorithm_opt,
+                )
+                .await?
+            });
         }
         Commands::Remove { node_id, force } => {
-            commands::remove::execute(&blockchain_config, node_id, force).await?;
+            commands::remove::execute(&connection, node_id, force).await?;
         }
     }
 
     Ok(())
+}
+
+/// Signer for encryption or decryption of the scheme `S`, created only when
+/// `needed`.
+fn cipher_keypair<S: Scheme>(
+    suri: &Option<String>,
+    needed: bool,
+    purpose: &str,
+) -> Result<Option<Signer<S>>> {
+    if !needed {
+        return Ok(None);
+    }
+    let suri = suri
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("SURI required for {purpose}"))?;
+    Ok(Some(Signer::from_suri(suri)?))
+}
+
+/// Parse the `--cipher` name when encryption is requested.
+fn parse_algorithm(encrypting: bool, name: &str) -> Result<Option<EncryptionAlgorithm>> {
+    if !encrypting {
+        return Ok(None);
+    }
+    EncryptionAlgorithm::from_str(name)
+        .map(Some)
+        .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))
 }

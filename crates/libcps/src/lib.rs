@@ -17,132 +17,147 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! # libcps - Robonomics Cyber-Physical Systems Library
 //!
-//! `libcps` provides a comprehensive Rust library for interacting with the Robonomics
-//! CPS (Cyber-Physical Systems) pallet. It enables developers to build applications
-//! that manage hierarchical cyber-physical systems on the Robonomics blockchain with
-//! support for encrypted data storage and IoT integration.
+//! High-level Rust API for the Robonomics CPS 1.0 pallet.
 //!
-//! ## Features
+//! ## Model
 //!
-//! - **Blockchain Integration**: Seamless interaction with Robonomics blockchain via subxt
-//! - **Encryption**: XChaCha20-Poly1305 AEAD encryption with sr25519 key derivation
-//! - **Type Safety**: Strongly-typed APIs matching the CPS pallet
-//! - **Async Support**: Built on tokio for efficient async operations
-//!
-//! ## Quick Start
-//!
-//! ```no_run
-//! use libcps::blockchain::{Client, Config};
-//!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     // Connect to blockchain
-//!     let config = Config {
-//!         ws_url: "ws://localhost:9944".to_string(),
-//!         suri: Some("//Alice".to_string()),
-//!     };
-//!     
-//!     let client = Client::new(&config).await?;
-//!     
-//!     // Use the client to interact with CPS pallet
-//!     // (metadata is auto-generated from runtime dependency)
-//!     
-//!     Ok(())
-//! }
+//! ```text
+//! NodeId  + extension traits   node topology, data, scope and access
+//! ScopeId + extension traits   scope queries
+//! Client                       connection, queries, transaction submission
+//! Transaction<T>               opaque prepared CPS transaction
+//! crypto::Signer<S>            identity: signs transactions and encrypts (S = Sr25519 | Ed25519)
 //! ```
 //!
-//! ## Modules
+//! [`NodeId`] and [`ScopeId`] are plain values; they never hold a client,
+//! signer or cached state. Reads take a [`Client`] and run immediately.
+//! Mutations only build a [`Transaction`], which is submitted explicitly.
+//! Subxt is an internal implementation detail.
 //!
-//! - [`blockchain`]: Blockchain client and connection management
-//! - [`crypto`]: Encryption and key derivation utilities
-//! - [`node`]: Node-oriented API with type definitions and async methods for CPS operations
-//!
-//! ## Encryption
-//!
-//! The library implements **AEAD encryption with multiple algorithms and schemes**:
+//! ## Quick start
 //!
 //! ```no_run
-//! use libcps::crypto::{Cipher, EncryptionAlgorithm, CryptoScheme};
+//! use libcps::{
+//!     crypto::{Signer, Sr25519},
+//!     prelude::*,
+//!     Client, NodeId,
+//! };
 //!
-//! # fn example() -> anyhow::Result<()> {
-//! // Create a Cipher with SR25519 scheme
-//! let sender_cipher = Cipher::new(
-//!     "//Alice".to_string(),
-//!     CryptoScheme::Sr25519,
-//! )?;
+//! # async fn run() -> libcps::Result<()> {
+//! let keypair = Signer::<Sr25519>::from_suri("//Alice")?;
 //!
-//! let receiver_cipher = Cipher::new(
-//!     "//Bob".to_string(),
-//!     CryptoScheme::Sr25519,
-//! )?;
+//! // `Some(url)` uses RPC, `None` starts the embedded light client.
+//! let client = Client::connect(Some("ws://127.0.0.1:9944")).await?;
 //!
-//! let plaintext = b"secret message";
-//! let receiver_public = receiver_cipher.public_key();
+//! let node = NodeId::from(42);
+//! let current = node.payload(&client).await?;
 //!
-//! // Encrypt using the cipher
-//! let encrypted_msg = sender_cipher.encrypt(plaintext, &receiver_public, EncryptionAlgorithm::XChaCha20Poly1305)?;
-//!
-//! // Decrypt with optional sender verification
-//! let sender_public = sender_cipher.public_key();
-//! let decrypted = receiver_cipher.decrypt(&encrypted_msg, Some(&sender_public))?;
+//! let tx = node.set_payload(b"hello")?;
+//! let receipt = client.submit_finalized(&tx, &keypair).await?;
+//! println!("finalized in {:?}", receipt.block_hash);
+//! # let _ = current;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! ## MQTT Bridge
+//! ## Creating nodes
 //!
-//! MQTT/IoT integration has moved to the dedicated `mqtt-bridge` crate, which
-//! depends on this library for blockchain, crypto, and node operations. See the
-//! `mqtt-bridge` crate documentation and its `examples/mqtt_config.toml` for
-//! configuration and usage details.
+//! ```no_run
+//! # use libcps::{crypto::{Signer, Sr25519}, prelude::*, Client, CreateNode};
+//! # async fn run(client: Client, keypair: Signer<Sr25519>) -> libcps::Result<()> {
+//! let root = client
+//!     .submit_finalized(&libcps::create_root(CreateNode::default())?, &keypair)
+//!     .await?
+//!     .result;
 //!
-//! ## Feature Flags
-//!
-//! The library supports optional features:
-//!
-//! - **`cli`** (default) - Enables CLI binary with colored output
-//!
-//! ```toml
-//! # Default (CLI enabled)
-//! libcps = "0.7.0"
-//!
-//! # Library only, no CLI
-//! libcps = { version = "0.7.0", default-features = false }
+//! let tx = root.create_child(CreateNode {
+//!     meta: Some(b"sensor".to_vec()),
+//!     payload: None,
+//! })?;
+//! let child = client.submit_finalized(&tx, &keypair).await?.result;
+//! # let _ = child;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## Scopes and access
 //!
-//! Ownership belongs to the *Scope* a node resolves to, not to the node
-//! itself. [`node::Node::resolve_scope`] and [`node::Node::has_capability`] use
-//! the runtime `CpsApi`, and the runtime alone authorizes mutations. See the
-//! [`node`] module for details.
+//! Ownership belongs to the *scope* a node resolves to, not to the node.
 //!
-//! ## Type Definitions
+//! ```no_run
+//! # use libcps::{crypto::{Signer, Sr25519}, prelude::*, *};
+//! # async fn run(client: Client, keypair: Signer<Sr25519>, node: NodeId, account: AccountId) -> Result<()> {
+//! let resolved = node.resolve_scope(&client).await?;
+//! let scope_info = resolved.id.info(&client).await?;
 //!
-//! The library provides types that match the CPS pallet:
+//! if !node.has_capability(&client, &account, Capability::Write).await? {
+//!     let tx = node.grant(account, Access::write_subtree())?;
+//!     client.submit_finalized(&tx, &keypair).await?;
+//! }
+//! # let _ = scope_info;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Encryption
+//!
+//! The [`crypto`] module encrypts payloads with AEAD ciphers using ECDH key
+//! agreement and HKDF. A [`crypto::Signer`] is tagged with its scheme
+//! ([`crypto::Sr25519`] or [`crypto::Ed25519`]); it signs transactions and
+//! implements [`crypto::Cipher`] (the two purposes stay separate). The receiver's
+//! [`crypto::PublicKey`] carries the same tag, so keys of another scheme cannot
+//! be mixed in: that is a compile error.
 //!
 //! ```
-//! use libcps::blockchain::BoundedVec;
-//! use libcps::node::NodeId;
+//! use libcps::crypto::{Cipher, EncryptionAlgorithm, Signer, Sr25519};
 //!
-//! let node_id = NodeId(42);
-//! let plain_data = BoundedVec(b"sensor reading".to_vec());
-//! let encrypted_data = BoundedVec(vec![1, 2, 3, 4]);
+//! # fn example() -> anyhow::Result<()> {
+//! let alice = Signer::<Sr25519>::from_suri("//Alice")?;
+//! let bob = Signer::<Sr25519>::from_suri("//Bob")?;
+//!
+//! let message = alice.encrypt(
+//!     b"secret",
+//!     &bob.public_key(),
+//!     EncryptionAlgorithm::XChaCha20Poly1305,
+//! )?;
+//! assert_eq!(bob.decrypt(&message, Some(&alice.public_key()))?, b"secret");
+//! # Ok(())
+//! # }
+//! # example().unwrap();
 //! ```
 //!
-//! ## Crates.io Metadata
+//! ## Feature flags
 //!
-//! - **Repository**: <https://github.com/airalab/robonomics>
-//! - **Documentation**: <https://docs.rs/libcps>
-//! - **License**: Apache-2.0
+//! - **`cli`** (default): builds the `cps` command-line binary.
 //!
 //! ## Safety
 //!
-//! This crate uses `#![forbid(unsafe_code)]` to ensure memory safety.
+//! This crate uses `#![forbid(unsafe_code)]`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod blockchain;
+mod backend;
+mod client;
 pub mod crypto;
-pub mod node;
+mod error;
+mod node;
+pub mod prelude;
+mod scope;
+mod transaction;
+mod types;
+
+pub(crate) use robonomics_runtime_subxt_api::api;
+
+pub use client::{Client, PendingTransaction, TxReceipt};
+pub use error::{Error, Result};
+pub use node::{
+    create_root, MetaUpdate, MetaWatcher, NodeAccess, NodeRead, NodeScope, NodeTree, NodeWrite,
+    PayloadUpdate, PayloadWatcher,
+};
+pub use scope::ScopeRead;
+pub use transaction::Transaction;
+pub use types::{
+    Access, AccountId, Capability, CreateNode, GrantMode, Hash, Meta, NodeId, NodeInfo, Payload,
+    ResolvedScope, ScopeId, ScopeInfo, MAX_META_SIZE, MAX_PAYLOAD_SIZE,
+};

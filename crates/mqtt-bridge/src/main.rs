@@ -22,11 +22,11 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use libcps::crypto::{Cipher, EncryptionAlgorithm};
-use libcps::{blockchain, crypto::CryptoScheme};
+use libcps::crypto::{EncryptionAlgorithm, Signer};
+use libcps::AccountId;
 use mqtt_bridge as mqtt;
+use mqtt_bridge::{with_scheme, CryptoScheme};
 use std::str::FromStr;
-use subxt::utils::AccountId32;
 
 mod commands;
 mod display;
@@ -35,7 +35,7 @@ mod display;
 ///
 /// # Supported formats
 /// - **SS58 address**: A valid Substrate SS58-encoded account ID. Decoding is attempted first
-///   using subxt's `AccountId32::from_str`, which supports both Sr25519 and
+///   using subxt's `AccountId::from_str`, which supports both Sr25519 and
 ///   Ed25519 (they share the same 32-byte public key length).
 /// - **Hex string**: A 64-hex-character string representing a 32-byte public key. An optional
 ///   `0x` prefix is allowed (e.g. `0xdeadbeef...` or `deadbeef...`).
@@ -45,8 +45,8 @@ mod display;
 /// - Returns an error if the hex decoding succeeds but the resulting byte length is not
 ///   exactly 32 bytes.
 fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
-    // Try SS58 decoding with AccountId32 (works for both Sr25519 and Ed25519)
-    if let Ok(account_id) = AccountId32::from_str(addr_or_hex) {
+    // Try SS58 decoding with AccountId (works for both Sr25519 and Ed25519)
+    if let Ok(account_id) = AccountId::from_str(addr_or_hex) {
         return Ok(account_id.0);
     }
 
@@ -258,11 +258,16 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize logging
-    std::env::set_var("RUST_LOG", &cli.log_level);
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_new(&cli.log_level)
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
 
     // Create blockchain config (crypto-free)
-    let blockchain_config = blockchain::Config {
+    let blockchain_config = mqtt::BlockchainConfig {
         ws_url: cli.ws_url.clone(),
         suri: cli.suri.clone(),
     };
@@ -294,27 +299,36 @@ async fn main() -> Result<()> {
                 None
             };
 
-            // Create cipher if encryption is requested
-            let (cipher_opt, algorithm_opt) = if receiver_public.is_some() {
-                let algorithm = EncryptionAlgorithm::from_str(&cipher)
-                    .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))?;
-                let suri = cli
-                    .suri
-                    .ok_or_else(|| anyhow::anyhow!("SURI required for encryption"))?;
-                (Some(Cipher::new(suri, scheme)?), Some(algorithm))
+            // Create keypair if encryption is requested
+            let algorithm_opt = if receiver_public.is_some() {
+                Some(
+                    EncryptionAlgorithm::from_str(&cipher)
+                        .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))?,
+                )
             } else {
-                (None, None)
+                None
             };
-            commands::subscribe(
-                &blockchain_config,
-                cipher_opt.as_ref(),
-                &mqtt_config,
-                &topic,
-                node_id,
-                receiver_pub_bytes,
-                algorithm_opt,
-            )
-            .await?;
+            with_scheme!(scheme, S => {
+                let keypair: Option<Signer<S>> = if receiver_public.is_some() {
+                    let suri = cli
+                        .suri
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("SURI required for encryption"))?;
+                    Some(Signer::from_suri(suri)?)
+                } else {
+                    None
+                };
+                commands::subscribe(
+                    &blockchain_config,
+                    keypair.as_ref(),
+                    &mqtt_config,
+                    &topic,
+                    node_id,
+                    receiver_pub_bytes,
+                    algorithm_opt,
+                )
+                .await?
+            });
         }
         Commands::Publish {
             topic,

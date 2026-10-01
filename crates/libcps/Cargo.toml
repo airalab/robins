@@ -29,10 +29,10 @@ required-features = ["cli"]
 [dependencies]
 # Blockchain
 subxt.workspace = true
-subxt-signer.workspace = true
 sp-core.workspace = true
 parity-scale-codec.workspace = true
 robonomics-runtime-subxt-api.workspace = true
+robonomics-chain-spec.workspace = true
 
 # Cryptography
 curve25519-dalek.workspace = true
@@ -51,21 +51,20 @@ indicatif = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 easy-hex.workspace = true
-base64.workspace = true
-bs58.workspace = true
 hex.workspace = true
 
 # Async
 tokio.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
 
 # Logging
-log.workspace = true
-env_logger = { workspace = true, optional = true }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 
 [features]
 default = ["cli"]
-cli = ["clap", "colored", "indicatif", "env_logger"]
+cli = ["clap", "colored", "indicatif", "tracing-subscriber"]
 
 [package.metadata.docs.rs]
 all-features = true

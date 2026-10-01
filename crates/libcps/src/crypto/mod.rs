@@ -15,10 +15,15 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Encryption and key derivation utilities.
+//! Identities, signing and encryption.
 //!
-//! This module provides encryption functions using multiple AEAD ciphers
+//! This module provides the account identity ([`Signer`], tagged by its scheme
+//! [`Sr25519`] or [`Ed25519`], with the matching [`PublicKey`]) and message
+//! encryption ([`Cipher`], built on [`SharedSecret`]) using multiple AEAD ciphers
 //! with Elliptic Curve Diffie-Hellman (ECDH) key agreement and HKDF key derivation.
+//!
+//! Signing and encryption stay separate: transactions are signed only with the
+//! asymmetric signing key, never with ECDH, HKDF or AEAD output.
 //!
 //! # Cryptographic Architecture
 //!
@@ -48,7 +53,8 @@
 //! ```
 //! Where:
 //! - `PRK`: The pseudorandom key from extract phase
-//! - `info`: Algorithm-specific context (e.g., "robonomics-cps-xchacha20poly1305")
+//! - `info`: Algorithm-specific context (e.g., `"xchacha20poly1305"`, see
+//!   [`EncryptionAlgorithm::info_string`])
 //! - `L`: Desired output length (32 bytes for 256-bit keys)
 //! - `OKM` (Output Keying Material): The final encryption key
 //!
@@ -58,11 +64,10 @@
 //! The constant salt `"robonomics-network"` provides:
 //! - **Domain Separation**: Keys derived for Robonomics network are distinct from other systems
 //! - **Additional Structure**: Adds a fixed input to the key derivation process independent of the shared secret
-//! - **Defense in Depth**: Provides security even if the shared secret has low entropy
 //!
-//! Note: The salt doesn't need to be secret or random. A constant application-specific
-//! value is appropriate here since the public keys are already incorporated in the
-//! ECDH shared secret derivation, making each key pair unique.
+//! Note: The salt doesn't need to be secret or random, and it adds no entropy. A
+//! constant application-specific value is appropriate here since the ECDH shared
+//! secret is already unique to each pair of keys.
 //!
 //! ### Info String Purpose
 //! The algorithm-specific info string provides:
@@ -73,13 +78,17 @@
 //! ## Security Guarantees
 //!
 //! This scheme provides:
-//! - **Forward Secrecy (with ephemeral ECDH keys)**: When each session uses fresh
-//!   ephemeral key pairs for ECDH, compromising one session's keys does not reveal
-//!   past sessions
+//! - **Confidentiality and integrity**: AEAD encryption authenticates the ciphertext
+//!   against the derived key
 //! - **Algorithm Agility**: Multiple AEAD algorithms supported without security loss
 //! - **Domain Separation**: Keys are bound to the Robonomics network context
 //! - **Key Independence**: Each algorithm and key pair combination produces unique keys
 //!
+//! Not provided: **forward secrecy**. Both parties use their long-term identity keys
+//! for ECDH, so the shared secret of a key pair is fixed and compromising a secret
+//! key reveals every message exchanged with that pair. The sender key `from` in the
+//! message is the sender's identity key; use the `expected_sender` argument of
+//! [`Cipher::decrypt`] to pin it.//!
 //! # Example Flow
 //!
 //! ```text
@@ -140,7 +149,13 @@
 //! - draft-irtf-cfrg-xchacha: XChaCha: eXtended-nonce ChaCha and AEAD_XChaCha20_Poly1305
 
 mod cipher;
+mod scheme;
+mod shared_secret;
+mod signer;
 mod types;
 
 pub use cipher::Cipher;
-pub use types::{CryptoScheme, EncryptedMessage, EncryptionAlgorithm};
+pub use scheme::{Ed25519, Scheme, Sr25519};
+pub use shared_secret::SharedSecret;
+pub use signer::{PublicKey, Signer};
+pub use types::{EncryptedMessage, EncryptionAlgorithm};

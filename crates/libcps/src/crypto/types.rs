@@ -17,101 +17,22 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! Cryptographic types for encryption.
 //!
-//! This module provides types for cryptographic schemes, encryption algorithms,
-//! and encrypted message formats used throughout the library.
+//! This module provides types for encryption algorithms and encrypted message
+//! formats used throughout the library.
 
 use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-/// Supported cryptographic schemes for encryption.
-///
-/// This enum distinguishes between different cryptographic key types
-/// used for ECDH key agreement and encryption, following Polkadot's
-/// naming convention of "scheme" rather than "keypair type".
-///
-/// # Schemes
-///
-/// - **SR25519**: Schnorrkel-based keys using Ristretto255 (Substrate native)
-///   - Used in: Substrate/Polkadot ecosystem
-///   - Key agreement: Ristretto255 scalar multiplication
-///   - Best for: Substrate blockchain operations
-///
-/// - **ED25519**: Edwards curve keys with X25519 ECDH conversion
-///   - Used in: IoT devices, Home Assistant, standard cryptography
-///   - Key agreement: ED25519 → Curve25519 → X25519
-///   - Best for: Compatibility with standard ED25519 implementations
-///
-/// # Examples
-///
-/// ```
-/// use libcps::crypto::CryptoScheme;
-/// use std::str::FromStr;
-///
-/// let scheme = CryptoScheme::Sr25519;
-/// assert_eq!(scheme.to_string(), "sr25519");
-///
-/// let from_str = CryptoScheme::from_str("ed25519").unwrap();
-/// assert_eq!(from_str, CryptoScheme::Ed25519);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CryptoScheme {
-    /// Schnorrkel SR25519 keys (Substrate native)
-    #[default]
-    Sr25519,
-    /// ED25519 keys (common in IoT, Home Assistant)
-    Ed25519,
-}
-
-impl CryptoScheme {
-    /// Get a human-readable name for this cryptographic scheme.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use libcps::crypto::CryptoScheme;
-    ///
-    /// assert_eq!(CryptoScheme::Sr25519.name(), "SR25519");
-    /// assert_eq!(CryptoScheme::Ed25519.name(), "ED25519");
-    /// ```
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Sr25519 => "SR25519",
-            Self::Ed25519 => "ED25519",
-        }
-    }
-}
-
-impl fmt::Display for CryptoScheme {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CryptoScheme::Sr25519 => write!(f, "sr25519"),
-            CryptoScheme::Ed25519 => write!(f, "ed25519"),
-        }
-    }
-}
-
-impl FromStr for CryptoScheme {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "sr25519" | "sr" => Ok(CryptoScheme::Sr25519),
-            "ed25519" | "ed" => Ok(CryptoScheme::Ed25519),
-            _ => Err(anyhow::anyhow!(
-                "Invalid cryptographic scheme: '{s}'. Supported: sr25519, ed25519"
-            )),
-        }
-    }
-}
-
 /// Supported encryption algorithms.
 ///
 /// All algorithms use AEAD (Authenticated Encryption with Associated Data)
 /// to provide both confidentiality and authenticity.
 ///
+/// Parsed from the names `xchacha20`, `aesgcm256` and `chacha20` (case-insensitive,
+/// with a few aliases such as `aes-256-gcm`); `Display` prints the HKDF info
+/// string (`xchacha20poly1305`, `aesgcm256`, `chacha20poly1305`).///
 /// # Examples
 ///
 /// ```
@@ -298,30 +219,5 @@ mod tests {
             EncryptionAlgorithm::default(),
             EncryptionAlgorithm::XChaCha20Poly1305
         );
-    }
-
-    #[test]
-    fn test_crypto_scheme_name() {
-        assert_eq!(CryptoScheme::Sr25519.name(), "SR25519");
-        assert_eq!(CryptoScheme::Ed25519.name(), "ED25519");
-    }
-
-    #[test]
-    fn test_crypto_scheme_display() {
-        assert_eq!(CryptoScheme::Sr25519.to_string(), "sr25519");
-        assert_eq!(CryptoScheme::Ed25519.to_string(), "ed25519");
-    }
-
-    #[test]
-    fn test_crypto_scheme_from_str() {
-        assert_eq!(
-            CryptoScheme::from_str("sr25519").unwrap(),
-            CryptoScheme::Sr25519
-        );
-        assert_eq!(
-            CryptoScheme::from_str("ed25519").unwrap(),
-            CryptoScheme::Ed25519
-        );
-        assert!(CryptoScheme::from_str("invalid").is_err());
     }
 }

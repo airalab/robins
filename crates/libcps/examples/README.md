@@ -11,7 +11,7 @@ This directory contains example scripts and code demonstrating libcps usage.
 
 2. Set environment variables:
    ```bash
-   export ROBONOMICS_WS_URL=ws://localhost:9944
+   export ROBONOMICS_WS_URL=ws://localhost:9944  # omit to use the embedded light client
    export ROBONOMICS_SURI="//Alice"  # Your seed phrase
    ```
 

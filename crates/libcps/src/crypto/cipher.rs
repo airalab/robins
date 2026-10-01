@@ -15,12 +15,16 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Cipher implementation for encryption and decryption.
+//! Encryption and decryption for the CPS [`Signer`](super::Signer).
 //!
-//! This module provides the Cipher struct which handles ECDH key agreement,
-//! HKDF key derivation, and AEAD encryption/decryption operations.
+//! This module provides the [`Cipher`] trait, implemented for every
+//! [`SharedSecret`] (the [`Signer`](super::Signer)). It handles ECDH key
+//! agreement, HKDF key derivation and AEAD encryption/decryption directly from
+//! the keypair, so no separate cipher object or copy of the key material is
+//! needed.
 
-use super::types::{CryptoScheme, EncryptedMessage, EncryptionAlgorithm};
+use super::shared_secret::SharedSecret;
+use super::types::{EncryptedMessage, EncryptionAlgorithm};
 use aes_gcm::{
     aead::{Aead as AesAead, KeyInit as AesKeyInit},
     Aes256Gcm, Nonce as AesNonce,
@@ -30,240 +34,73 @@ use chacha20poly1305::{
     aead::Generate, ChaCha20Poly1305, Nonce as ChachaNonce, XChaCha20Poly1305, XNonce,
 };
 use hkdf::Hkdf;
-use log::{debug, trace};
-use sha2::{Digest, Sha256, Sha512};
-use sp_core::Pair;
+use sha2::Sha256;
+use tracing::{debug, trace};
 
 /// HKDF salt for key derivation.
 const HKDF_SALT: &[u8] = b"robonomics-network";
 
-/// Cipher configuration for encryption and decryption operations.
+/// Encryption and decryption with a CPS keypair.
 ///
-/// Stores only the 32-byte secret key and algorithm for optimal performance.
-/// Uses direct ECDH implementations:
-/// - SR25519: Ristretto255 scalar multiplication via schnorrkel
-/// - ED25519: X25519 key agreement via curve25519-dalek
+/// Blanket-implemented for every [`SharedSecret`]; the [`Signer`](super::Signer) is
+/// the keypair type. Import the trait to use it. Key agreement is
+/// [`SharedSecret::derive_shared`]; the receiver's public key is the signer's
+/// [`PublicKey`](super::PublicKey) of the same scheme, so a key of another
+/// scheme cannot be passed.
 ///
 /// # Examples
 ///
-/// ```no_run
-/// use libcps::crypto::{Cipher, EncryptionAlgorithm, CryptoScheme};
-///
-/// let cipher = Cipher::new(
-///     "//Alice".to_string(),
-///     CryptoScheme::Sr25519,
-/// ).unwrap();
-///
-/// let plaintext = b"secret message";
-/// let receiver_public = &[0u8; 32]; // receiver's public key
-/// let encrypted_msg = cipher.encrypt(plaintext, receiver_public, EncryptionAlgorithm::XChaCha20Poly1305).unwrap();
-/// let decrypted = cipher.decrypt(&encrypted_msg, None).unwrap();
 /// ```
-pub struct Cipher {
-    /// 32-byte secret key
-    secret: [u8; 32],
-    /// Cached public key (derived once in constructor)
-    public_key: [u8; 32],
-    /// Cryptographic scheme
-    scheme: CryptoScheme,
-}
-impl Cipher {
-    /// Create a new Cipher configuration.
-    ///
-    /// Extracts and stores only the 32-byte secret key for optimal performance.
-    ///
-    /// # Arguments
-    ///
-    /// * `suri` - Secret URI for the keypair
-    /// * `scheme` - Cryptographic scheme to use (Sr25519 or Ed25519)
-    ///
-    /// # Returns
-    ///
-    /// Returns a Cipher instance with the secret key and public key
-    ///
-    /// # Errors
-    ///
-    /// Returns error if keypair parsing fails
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use libcps::crypto::{Cipher, CryptoScheme};
-    ///
-    /// let cipher = Cipher::new(
-    ///     "//Alice".to_string(),
-    ///     CryptoScheme::Sr25519,
-    /// ).unwrap();
-    /// ```
-    pub fn new(suri: String, scheme: CryptoScheme) -> Result<Self> {
-        debug!("Creating new Cipher with scheme: {:?}", scheme);
-        trace!("SURI length: {} chars", suri.len());
-
-        let (secret, public_key) = match scheme {
-            CryptoScheme::Sr25519 => {
-                trace!("Parsing SR25519 keypair from SURI");
-                let pair = sp_core::sr25519::Pair::from_string(&suri, None)
-                    .map_err(|e| anyhow!("Failed to parse SR25519 keypair: {:?}", e))?;
-                let secret_bytes = pair.to_raw_vec();
-                let mut secret = [0u8; 32];
-                secret.copy_from_slice(&secret_bytes[..32]);
-                // Derive public key using Pair interface
-                let public_key = pair.public().0;
-                debug!("SR25519 keypair created successfully");
-                (secret, public_key)
-            }
-            CryptoScheme::Ed25519 => {
-                trace!("Parsing ED25519 keypair from SURI");
-                let pair = sp_core::ed25519::Pair::from_string(&suri, None)
-                    .map_err(|e| anyhow!("Failed to parse ED25519 keypair: {:?}", e))?;
-                let secret_bytes = pair.to_raw_vec();
-                let mut secret = [0u8; 32];
-                secret.copy_from_slice(&secret_bytes[..32]);
-                // Derive public key using Pair interface
-                let public_key = pair.public().0;
-                debug!("ED25519 keypair created successfully");
-                (secret, public_key)
-            }
-        };
-        Ok(Cipher {
-            secret,
-            public_key,
-            scheme,
-        })
-    }
-
-    /// Get the cryptographic scheme.
-    pub fn scheme(&self) -> CryptoScheme {
-        self.scheme
-    }
-
-    /// Derive shared secret using direct ECDH.
-    ///
-    /// # Arguments
-    ///
-    /// * `receiver_public` - The receiver's public key (32 bytes)
-    ///
-    /// # Returns
-    ///
-    /// Returns 32-byte shared secret
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the public key cannot be decompressed into a valid curve point.
-    /// Not all 32-byte arrays represent valid curve points - decompression validates
-    /// the point is on the curve and meets other curve-specific requirements.
-    fn derive_shared_secret(&self, receiver_public: &[u8; 32]) -> Result<[u8; 32]> {
-        match self.scheme {
-            CryptoScheme::Sr25519 => {
-                // SR25519: Use Ristretto255 for ECDH
-                use curve25519_dalek::ristretto::CompressedRistretto;
-                use curve25519_dalek::scalar::Scalar;
-
-                // Create scalar from secret key
-                let scalar = Scalar::from_bytes_mod_order(self.secret);
-
-                // Decompress receiver's public key as Ristretto point
-                let public_compressed = CompressedRistretto(*receiver_public);
-                let public_point = public_compressed
-                    .decompress()
-                    .ok_or_else(|| anyhow!("Failed to decompress Ristretto255 public key"))?;
-
-                // Perform scalar multiplication
-                let shared_point = scalar * public_point;
-                let shared_compressed = shared_point.compress();
-
-                // Hash for uniform distribution
-                let mut hasher = Sha512::new();
-                hasher.update(b"robonomics-cps-ecdh");
-                hasher.update(shared_compressed.as_bytes());
-                let hash_output = hasher.finalize();
-
-                let mut result = [0u8; 32];
-                result.copy_from_slice(&hash_output[..32]);
-                Ok(result)
-            }
-            CryptoScheme::Ed25519 => {
-                // ED25519: Use X25519 for ECDH
-                use curve25519_dalek::edwards::CompressedEdwardsY;
-
-                // Hash and clamp secret for X25519
-                let mut hasher = Sha512::new();
-                hasher.update(self.secret);
-                let hash = hasher.finalize();
-
-                let mut scalar_bytes = [0u8; 32];
-                scalar_bytes.copy_from_slice(&hash[..32]);
-
-                // Clamp for X25519
-                scalar_bytes[0] &= 248;
-                scalar_bytes[31] &= 127;
-                scalar_bytes[31] |= 64;
-
-                let my_x25519_secret = x25519_dalek::StaticSecret::from(scalar_bytes);
-
-                // Convert Ed25519 public key to X25519
-                let compressed_edwards = CompressedEdwardsY(*receiver_public);
-                let edwards_point = compressed_edwards
-                    .decompress()
-                    .ok_or_else(|| anyhow!("Failed to decompress ED25519 public key"))?;
-
-                let montgomery_point = edwards_point.to_montgomery();
-                let their_x25519_public =
-                    x25519_dalek::PublicKey::from(montgomery_point.to_bytes());
-
-                // Perform X25519 ECDH
-                let shared_secret = my_x25519_secret.diffie_hellman(&their_x25519_public);
-                Ok(*shared_secret.as_bytes())
-            }
-        }
-    }
-
-    /// Get sender's public key.
-    ///
-    /// Returns the cached public key that was derived in the constructor.
-    pub fn public_key(&self) -> [u8; 32] {
-        self.public_key
-    }
-
+/// use libcps::crypto::{Cipher, EncryptionAlgorithm, Signer, Sr25519};
+///
+/// let alice = Signer::<Sr25519>::from_suri("//Alice").unwrap();
+/// let bob = Signer::<Sr25519>::from_suri("//Bob").unwrap();
+///
+/// let encrypted = alice
+///     .encrypt(b"secret message", &bob.public_key(), EncryptionAlgorithm::XChaCha20Poly1305)
+///     .unwrap();
+/// let decrypted = bob.decrypt(&encrypted, Some(&alice.public_key())).unwrap();
+/// assert_eq!(decrypted, b"secret message");
+/// ```
+pub trait Cipher: SharedSecret {
     /// Encrypt data for a specific receiver with inlined AEAD.
+    ///
+    /// The key is derived from the ECDH shared secret with `receiver_public` via
+    /// HKDF-SHA256, and a fresh random nonce is generated for every message. The
+    /// message records this keypair's public key as the sender (`from`).
     ///
     /// # Arguments
     ///
     /// * `plaintext` - The data to encrypt
-    /// * `receiver_public` - The recipient's public key (exactly 32 bytes)
+    /// * `receiver_public` - The recipient's public key, of the same scheme as this keypair
     /// * `algorithm` - The encryption algorithm to use
     ///
     /// # Returns
     ///
-    /// Returns an EncryptedMessage structure that can be serialized by the caller
+    /// Returns an [`EncryptedMessage`] that can be serialized by the caller
     ///
     /// # Errors
     ///
-    /// Returns error if the receiver's public key is invalid (not a valid curve point).
-    /// This can happen if:
+    /// Returns error if the receiver's public key is invalid (not a valid curve point)
+    /// or if the AEAD encryption fails. An invalid key can happen if:
     /// - The public key bytes don't represent a valid Ristretto255 point (SR25519)
-    /// - The public key bytes don't represent a valid Edwards curve point (Ed25519)
+    /// - The public key bytes don't represent a valid Edwards curve point (ED25519)
     /// - The receiver_public parameter contains corrupted or malicious data
     ///
     /// Note: Valid public keys from Substrate accounts will always succeed.
-    pub fn encrypt(
+    fn encrypt(
         &self,
         plaintext: &[u8],
-        receiver_public: &[u8; 32],
+        receiver_public: &Self::Public,
         algorithm: EncryptionAlgorithm,
     ) -> Result<EncryptedMessage> {
-        debug!(
-            "Encrypting {} bytes with {} using {:?} scheme",
-            plaintext.len(),
-            algorithm,
-            self.scheme
-        );
+        debug!("Encrypting {} bytes with {}", plaintext.len(), algorithm);
         trace!("Receiver public key provided; proceeding with ECDH");
 
         // Step 1: Derive shared secret using direct ECDH
         // This can fail if receiver_public is invalid
         trace!("Deriving shared secret via ECDH");
-        let shared_secret = self.derive_shared_secret(receiver_public)?;
+        let shared_secret = self.derive_shared(receiver_public)?;
         trace!("Shared secret derived successfully");
 
         // Step 2: Derive encryption key using HKDF with salt
@@ -310,7 +147,11 @@ impl Cipher {
         };
 
         // Step 4: Get sender's public key
-        let sender_public = self.public_key();
+        let sender_public: [u8; 32] = self
+            .public_key()
+            .as_ref()
+            .try_into()
+            .expect("public keys are 32 bytes");
         trace!("Sender public key: {:02x?}...", &sender_public[..8]);
 
         // Step 5: Create and return message structure with binary data
@@ -330,10 +171,14 @@ impl Cipher {
 
     /// Decrypt data with inlined AEAD (algorithm auto-detected).
     ///
+    /// The shared secret is derived with the sender key `from` recorded in the
+    /// message, interpreted in this keypair's scheme.
+    ///
     /// # Arguments
     ///
     /// * `message` - Encrypted message structure
-    /// * `expected_sender` - Optional sender public key for verification
+    /// * `expected_sender` - Optional sender public key; if given, the message is
+    ///   rejected unless its `from` equals it
     ///
     /// # Returns
     ///
@@ -341,11 +186,13 @@ impl Cipher {
     ///
     /// # Errors
     ///
-    /// Returns error if decryption fails or sender verification fails
-    pub fn decrypt(
+    /// Returns error if the sender does not match `expected_sender`, the sender key
+    /// is not a valid curve point, the nonce has the wrong length for the algorithm,
+    /// or the AEAD decryption fails (wrong key or tampered data).
+    fn decrypt(
         &self,
         message: &EncryptedMessage,
-        expected_sender: Option<&[u8; 32]>,
+        expected_sender: Option<&Self::Public>,
     ) -> Result<Vec<u8>> {
         match message {
             EncryptedMessage::V1 {
@@ -354,10 +201,7 @@ impl Cipher {
                 nonce,
                 ciphertext,
             } => {
-                debug!(
-                    "Decrypting message with {:?} using {:?} scheme",
-                    algorithm, self.scheme
-                );
+                debug!("Decrypting message with {:?}", algorithm);
                 trace!(
                     "Ciphertext: {} bytes, nonce: {} bytes",
                     ciphertext.len(),
@@ -368,7 +212,7 @@ impl Cipher {
                 // Step 1: Verify sender if expected
                 if let Some(expected_pk) = expected_sender {
                     trace!("Verifying sender public key");
-                    if from != expected_pk {
+                    if from.as_slice() != expected_pk.as_ref() {
                         return Err(anyhow!(
                             "Sender public key mismatch: message from unexpected sender"
                         ));
@@ -378,7 +222,7 @@ impl Cipher {
 
                 // Step 2: Derive shared secret using direct ECDH
                 trace!("Deriving shared secret via ECDH");
-                let shared_secret = self.derive_shared_secret(from)?;
+                let shared_secret = self.derive_shared(&Self::Public::from(*from))?;
                 trace!("Shared secret derived successfully");
 
                 // Step 3: Derive encryption key using HKDF with salt
@@ -442,22 +286,26 @@ impl Cipher {
     }
 }
 
+impl<K: SharedSecret> Cipher for K {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::{Ed25519, PublicKey, Signer, Sr25519};
 
-    #[test]
-    fn test_cipher_creation() {
-        let cipher = Cipher::new("//Alice".to_string(), CryptoScheme::Sr25519).unwrap();
+    fn sr(suri: &str) -> Signer<Sr25519> {
+        Signer::from_suri(suri).unwrap()
+    }
 
-        assert_eq!(cipher.scheme(), CryptoScheme::Sr25519);
+    fn ed(suri: &str) -> Signer<Ed25519> {
+        Signer::from_suri(suri).unwrap()
     }
 
     #[test]
     fn test_encrypt_decrypt_roundtrip_sr25519() {
-        let cipher = Cipher::new("//Alice".to_string(), CryptoScheme::Sr25519).unwrap();
+        let cipher = sr("//Alice");
 
-        // Get Alice's public key for self-encryption
+        // Alice's own public key, for self-encryption
         let public_key = cipher.public_key();
 
         let plaintext = b"Hello, World!";
@@ -475,9 +323,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_roundtrip_ed25519() {
-        let cipher = Cipher::new("//Alice".to_string(), CryptoScheme::Ed25519).unwrap();
-
-        // Get Alice's public key for self-encryption
+        let cipher = ed("//Alice");
         let public_key = cipher.public_key();
 
         let plaintext = b"Hello, World!";
@@ -491,83 +337,90 @@ mod tests {
 
     #[test]
     fn test_cross_party_encryption_sr25519() {
-        let alice = Cipher::new("//Alice".to_string(), CryptoScheme::Sr25519).unwrap();
-
-        let bob = Cipher::new("//Bob".to_string(), CryptoScheme::Sr25519).unwrap();
-
-        let bob_public = bob.public_key();
-        let alice_public = alice.public_key();
+        let alice = sr("//Alice");
+        let bob = sr("//Bob");
 
         let plaintext = b"Secret from Alice to Bob";
         let encrypted = alice
             .encrypt(
                 plaintext,
-                &bob_public,
+                &bob.public_key(),
                 EncryptionAlgorithm::XChaCha20Poly1305,
             )
             .unwrap();
-        let decrypted = bob.decrypt(&encrypted, Some(&alice_public)).unwrap();
+        let decrypted = bob.decrypt(&encrypted, Some(&alice.public_key())).unwrap();
 
         assert_eq!(plaintext.to_vec(), decrypted);
     }
 
     #[test]
-    fn test_sender_verification_fails() {
-        let alice = Cipher::new("//Alice".to_string(), CryptoScheme::Sr25519).unwrap();
+    fn test_cross_party_encryption_ed25519() {
+        let alice = ed("//Alice");
+        let bob = ed("//Bob");
 
-        let bob = Cipher::new("//Bob".to_string(), CryptoScheme::Sr25519).unwrap();
-
-        let charlie = Cipher::new("//Charlie".to_string(), CryptoScheme::Sr25519).unwrap();
-
-        let bob_public = bob.public_key();
-        let charlie_public = charlie.public_key();
-
-        let plaintext = b"From Alice";
         let encrypted = alice
             .encrypt(
-                plaintext,
-                &bob_public,
+                b"hi",
+                &bob.public_key(),
+                EncryptionAlgorithm::ChaCha20Poly1305,
+            )
+            .unwrap();
+
+        assert_eq!(
+            bob.decrypt(&encrypted, Some(&alice.public_key())).unwrap(),
+            b"hi"
+        );
+    }
+
+    #[test]
+    fn test_sender_verification_fails() {
+        let alice = sr("//Alice");
+        let bob = sr("//Bob");
+        let charlie = sr("//Charlie");
+
+        let encrypted = alice
+            .encrypt(
+                b"From Alice",
+                &bob.public_key(),
                 EncryptionAlgorithm::XChaCha20Poly1305,
             )
             .unwrap();
 
         // Should fail: expecting message from Charlie, but it's from Alice
-        let result = bob.decrypt(&encrypted, Some(&charlie_public));
+        let result = bob.decrypt(&encrypted, Some(&charlie.public_key()));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("mismatch"));
     }
 
     #[test]
-    fn test_derive_shared_secret_sr25519() {
-        let alice = Cipher::new("//Alice".to_string(), CryptoScheme::Sr25519).unwrap();
+    fn test_derive_shared_sr25519() {
+        let alice = sr("//Alice");
+        let bob = sr("//Bob");
 
-        let bob = Cipher::new("//Bob".to_string(), CryptoScheme::Sr25519).unwrap();
-
-        let bob_public = bob.public_key();
-        let alice_public = alice.public_key();
-
-        // Derive shared secrets
-        let alice_shared = alice.derive_shared_secret(&bob_public).unwrap();
-        let bob_shared = bob.derive_shared_secret(&alice_public).unwrap();
-
-        // Shared secrets should match (Diffie-Hellman property)
-        assert_eq!(alice_shared, bob_shared);
+        // Diffie-Hellman property: both sides derive the same secret
+        assert_eq!(
+            alice.derive_shared(&bob.public_key()).unwrap(),
+            bob.derive_shared(&alice.public_key()).unwrap()
+        );
     }
 
     #[test]
-    fn test_derive_shared_secret_ed25519() {
-        let alice = Cipher::new("//Alice".to_string(), CryptoScheme::Ed25519).unwrap();
+    fn test_derive_shared_ed25519() {
+        let alice = ed("//Alice");
+        let bob = ed("//Bob");
 
-        let bob = Cipher::new("//Bob".to_string(), CryptoScheme::Ed25519).unwrap();
+        assert_eq!(
+            alice.derive_shared(&bob.public_key()).unwrap(),
+            bob.derive_shared(&alice.public_key()).unwrap()
+        );
+    }
 
-        let bob_public = bob.public_key();
-        let alice_public = alice.public_key();
-
-        // Derive shared secrets
-        let alice_shared = alice.derive_shared_secret(&bob_public).unwrap();
-        let bob_shared = bob.derive_shared_secret(&alice_public).unwrap();
-
-        // Shared secrets should match (Diffie-Hellman property)
-        assert_eq!(alice_shared, bob_shared);
+    #[test]
+    fn test_invalid_receiver_public_key_is_rejected() {
+        // Not a valid compressed point encoding
+        let invalid = PublicKey::<Sr25519>::from([0xffu8; 32]);
+        assert!(sr("//Alice")
+            .encrypt(b"x", &invalid, EncryptionAlgorithm::XChaCha20Poly1305)
+            .is_err());
     }
 }
