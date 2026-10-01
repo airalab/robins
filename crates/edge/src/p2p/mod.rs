@@ -48,6 +48,7 @@ use crate::shutdown::ShutdownSignal;
 use futures::StreamExt;
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{gossipsub, identify, noise, ping, tcp, yamux, Multiaddr, PeerId, Swarm};
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::Duration;
@@ -133,7 +134,6 @@ pub fn load_or_create_identity(
     identity_file: Option<&std::path::Path>,
 ) -> std::io::Result<libp2p::identity::Keypair> {
     use libp2p::identity::Keypair;
-    use rand::RngCore;
 
     let Some(path) = identity_file else {
         return Ok(Keypair::generate_ed25519());
@@ -171,7 +171,7 @@ pub fn load_or_create_identity(
         })
     } else {
         let mut seed = [0u8; SECRET_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
+        rand::rng().fill_bytes(&mut seed);
         std::fs::write(path, format!("0x{}", hex::encode(seed)))?;
         Keypair::ed25519_from_bytes(seed).map_err(|err| {
             std::io::Error::other(format!("failed to build ed25519 identity: {err}"))
@@ -295,7 +295,7 @@ impl GossipNode {
                 metrics::counter!(PUBLISH_TOTAL).increment(1);
                 tracing::info!(envelope_id = %message.envelope_id, "published to gossipsub");
             }
-            Err(gossipsub::PublishError::InsufficientPeers) => {
+            Err(gossipsub::PublishError::NoPeersSubscribedToTopic) => {
                 tracing::warn!(
                     envelope_id = %message.envelope_id,
                     "no subscribed peers; message not published"
