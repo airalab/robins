@@ -22,8 +22,8 @@
 //!
 //! Run with: cargo run --example mqtt_bridge
 
-use libcps::blockchain::Config as BlockchainConfig;
 use mqtt_bridge as mqtt;
+use mqtt_bridge::BlockchainConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
     mqtt_config
         .subscribe(
             &blockchain_config,
-            None, // No encryption
+            None::<&libcps::crypto::Signer<libcps::crypto::Sr25519>>, // No encryption
             "sensors/temp",
             1,    // node_id
             None, // No receiver public key

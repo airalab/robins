@@ -15,9 +15,6 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Blockchain client and connection management.
+//! Extension traits needed for normal use: `use libcps::prelude::*;`.
 
-pub mod client;
-pub use client::{Client, Config};
-
-pub use robonomics_runtime_subxt_api::*;
+pub use crate::{NodeAccess, NodeRead, NodeScope, NodeTree, NodeWrite, ScopeRead};

@@ -1,108 +1,54 @@
 # libcps Examples
 
-This directory contains example scripts and code demonstrating libcps usage.
+## Rust examples
 
-## Prerequisites
+Run from the repository root (inside `nix develop`):
 
-1. Running Robonomics node:
+### `light_client_read` - read the production chain with the light client
+
+Starts the embedded light client (Polkadot relay chain + Robonomics parachain, specs
+come from `robonomics-chain-spec`) and prints the whole CPS tree below a root node.
+No RPC endpoint and no keys are needed; the first run waits until the light client
+has synced a finalized block.
+
+```bash
+cargo run -p libcps --example light_client_read --no-default-features -- <ROOT_NODE_ID>
+# or
+CPS_ROOT_NODE=<ROOT_NODE_ID> cargo run -p libcps --example light_client_read --no-default-features
+```
+
+### `rpc_client_write` - send transactions to a local testnet over RPC
+
+Creates a root node and a child, updates payload and metadata, reads them back and
+deletes the nodes again.
+
+1. Start a development node (the `robonomics` binary is built from the
+   [airalab/robonomics](https://github.com/airalab/robonomics) repository and is not part of
+   this workspace); it pre-funds `//Alice`:
    ```bash
    robonomics --dev --tmp
    ```
-
-2. Set environment variables:
+2. Run the example:
    ```bash
-   export ROBONOMICS_WS_URL=ws://localhost:9944
-   export ROBONOMICS_SURI="//Alice"  # Your seed phrase
+   cargo run -p libcps --example rpc_client_write --no-default-features
    ```
 
-3. For MQTT examples, ensure an MQTT broker is running:
-   ```bash
-   # Using mosquitto
-   mosquitto -v
-   
-   # Or using docker
-   docker run -it -p 1883:1883 eclipse-mosquitto:latest
-   ```
+Environment variables (both optional):
 
-## CLI Examples (Shell Scripts)
+- `ROBONOMICS_WS_URL` - node endpoint, default `ws://127.0.0.1:9944`
+- `ROBONOMICS_SURI` - signer secret URI, default `//Alice`
 
-### Encryption Examples
+## CLI examples (shell scripts)
+
+Set `ROBONOMICS_WS_URL` (omit it to use the embedded light client) and `ROBONOMICS_SURI`
+first, e.g. against the development node above:
+
+```bash
+export ROBONOMICS_WS_URL=ws://localhost:9944
+export ROBONOMICS_SURI="//Alice"
+```
+
 - `encrypt_xchacha20.sh` - XChaCha20-Poly1305 encryption (default, recommended)
 - `encrypt_ed25519.sh` - ED25519 scheme for IoT compatibility
 
-### MQTT Integration
-- `mqtt_encrypted.sh` - Subscribe to MQTT with encryption
-
-## Library Examples (Rust)
-
-### MQTT Bridge Example
-- `mqtt_bridge.rs` - Demonstrates using MQTT bridge from library code
-
-Run the example:
-```bash
-cargo run --example mqtt_bridge
-```
-
-This example shows:
-- How to configure MQTT and blockchain connections
-- Using `mqtt::parse_mqtt_url()` for URL parsing
-- Setting up subscribe bridge with custom message handler
-- Setting up publish bridge with custom publish handler
-
-## Configuration File Examples
-
-### MQTT Config File
-- `mqtt_config.toml` - Complete MQTT bridge configuration file
-
-Use the config file with CLI:
-```bash
-# Start all bridges from config file
-cps mqtt start -c examples/mqtt_config.toml
-```
-
-Use the config file from library:
-```rust
-use libcps::mqtt::Config;
-
-let config = Config::from_file("examples/mqtt_config.toml")?;
-config.start().await?;
-```
-
-The config file demonstrates:
-- Multiple subscribe topics with different encryption settings
-- Multiple publish topics for monitoring blockchain nodes
-- Concurrent bridge execution
-- Per-topic encryption configuration
-
-## Running Shell Examples
-
-```bash
-# Make scripts executable
-chmod +x tools/libcps/examples/*.sh
-
-# Run an example
-./tools/libcps/examples/encrypt_xchacha20.sh
-```
-
-## Important Notes
-
-⚠️ **Encryption requires BOTH**:
-1. **Sender's seed phrase** (`--suri` or `ROBONOMICS_SURI`)
-2. **Receiver's public key** (`--receiver-public`)
-
-Without both parameters, data will be stored as plaintext.
-
-## Testing MQTT Examples
-
-To test MQTT functionality, you can publish/subscribe to test topics:
-
-```bash
-# Subscribe to a topic (in one terminal)
-mosquitto_sub -h localhost -t "sensors/temperature"
-
-# Publish test data (in another terminal)
-mosquitto_pub -h localhost -t "sensors/temperature" -m "22.5"
-
-# Run the bridge
-cps mqtt subscribe "sensors/temperature" 5
-```
+MQTT bridge examples live in [`crates/mqtt-bridge/examples`](../../mqtt-bridge/examples).

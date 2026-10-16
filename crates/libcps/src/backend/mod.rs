@@ -15,24 +15,21 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Robonomics Node binary
+//! Private Subxt backend of the high-level API.
+//!
+//! Nothing in this module is part of the public API: Subxt types stay behind
+//! [`crate::Client`] and [`crate::Transaction`].
 
-#![warn(missing_docs)]
+mod light;
+mod rpc;
 
-// Force the linker to keep the polkadot_jemalloc_shim crate (and its #[global_allocator]).
-#[cfg(target_os = "linux")]
-extern crate polkadot_jemalloc_shim;
+pub(crate) use light::connect_light;
+pub(crate) use rpc::connect_rpc;
 
-/// OMNI Node based CLI
-mod cli;
+use robonomics_runtime_subxt_api::RobonomicsConfig;
 
-fn main() -> color_eyre::eyre::Result<()> {
-    color_eyre::install()?;
+/// Subxt client used by the backend.
+pub(crate) type Api = subxt::OnlineClient<RobonomicsConfig>;
 
-    // Install the ring CryptoProvider for rustls before any TLS connections are made.
-    // Ignore the error if a provider was already installed.
-    // TODO: remove when fixed https://github.com/paritytech/polkadot-sdk/issues/11164
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    cli::run()
-}
+/// Subxt view of the chain at one block.
+pub(crate) type At = subxt::client::OnlineClientAtBlock<RobonomicsConfig>;

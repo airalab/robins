@@ -616,10 +616,10 @@ fn decrypt_ciphertext(entry: &Encrypted, suri: &str) -> Result<Vec<u8>, CliError
         nonce: entry.nonce.clone(),
         ciphertext: entry.ciphertext.clone(),
     };
-    let cipher =
-        libcps::crypto::Cipher::new(suri.to_string(), libcps::crypto::CryptoScheme::Ed25519)
-            .map_err(|e| CliError::runtime(format!("failed to initialise cipher: {e}")))?;
-    cipher
+    use libcps::crypto::{Cipher as _, Ed25519, Signer};
+    let keypair = Signer::<Ed25519>::from_suri(suri)
+        .map_err(|e| CliError::runtime(format!("failed to initialise cipher: {e}")))?;
+    keypair
         .decrypt(&message, None)
         .map_err(|e| CliError::runtime(format!("decryption failed: {e}")))
 }
@@ -831,11 +831,16 @@ mod compact {
     ) -> Result<Encrypted, CliError> {
         let receiver_public = super::resolve_recipient(recipient)?;
         let suri = identity.secret_to_hex();
-        let cipher = libcps::crypto::Cipher::new(suri, libcps::crypto::CryptoScheme::Ed25519)
+        use libcps::crypto::{Cipher as _, Ed25519, PublicKey, Signer};
+        let cipher = Signer::<Ed25519>::from_suri(&suri)
             .map_err(|e| CliError::runtime(format!("failed to initialise cipher: {e}")))?;
         let algorithm = libcps::crypto::EncryptionAlgorithm::XChaCha20Poly1305;
         let encrypted = cipher
-            .encrypt(&plaintext, &receiver_public, algorithm)
+            .encrypt(
+                &plaintext,
+                &PublicKey::<Ed25519>::from(receiver_public),
+                algorithm,
+            )
             .map_err(|e| CliError::runtime(format!("encryption failed for `{recipient}`: {e}")))?;
         match encrypted {
             libcps::crypto::EncryptedMessage::V1 {

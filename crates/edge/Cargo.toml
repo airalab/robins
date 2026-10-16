@@ -44,7 +44,6 @@ env_logger = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
 zstd = { workspace = true, optional = true }
-log.workspace = true
 # Used by `edge message` to encrypt `private:` sections (ECDH + AEAD) via
 # `libcps::crypto::Cipher`. Only the `crypto` module is needed, so CLI/
 # blockchain features are disabled.

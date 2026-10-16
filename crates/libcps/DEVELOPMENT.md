@@ -40,7 +40,7 @@ Available features:
 
 Feature dependencies:
 - `default = ["mqtt", "cli"]`
-- `cli = ["mqtt", "clap", "colored", "chrono", "indicatif", "env_logger", "easy-hex"]`
+- `cli = ["mqtt", "clap", "colored", "chrono", "indicatif", "tracing-subscriber", "easy-hex"]`
 
 ## Code Structure
 
@@ -48,11 +48,12 @@ Feature dependencies:
 
 1. **`src/lib.rs`**: Library entry point with module exports
 2. **`src/main.rs`**: CLI entry point using `clap` for argument parsing
-3. **`src/blockchain/`**: Blockchain client and connection management
 4. **`src/commands/`**: Individual CLI command implementations (thin wrappers)
 5. **`src/crypto/`**: Encryption/decryption utilities (library)
 6. **`src/display/`**: Beautiful colored output formatting (CLI-only)
-8. **`src/node.rs`**: Node-oriented API with type definitions for CPS operations (library)
+3. **`src/client.rs`, `src/transaction.rs`, `src/types.rs`, `src/error.rs`**: `Client`, opaque `Transaction<T>`, value types and `Error` (library)
+8. **`src/node/`, `src/scope/`**: extension traits implemented for `NodeId` and `ScopeId` (library)
+9. **`src/backend/`**: private Subxt backend: RPC and the embedded light client (library, crate-private)
 
 ### Adding a New Command
 
@@ -66,13 +67,14 @@ Example:
 
 ```rust
 // src/commands/my_command.rs
-use crate::blockchain::{Client, Config};
+use super::Connection;
 use crate::display;
 use anyhow::Result;
 
-pub async fn execute(config: &Config, param: String) -> Result<()> {
+pub async fn execute(connection: &Connection, param: String) -> Result<()> {
     display::progress("Executing my command...");
-    let client = Client::new(config).await?;
+    let client = connection.client().await?;
+    let keypair = connection.keypair()?;
     // Your implementation here
     display::success("Command completed!");
     Ok(())
@@ -84,12 +86,19 @@ pub async fn execute(config: &Config, param: String) -> Result<()> {
 ### Unit Tests
 
 ```bash
-cargo test --package libcps
+cargo test -p libcps --lib --no-default-features
 ```
 
 ### Integration Testing
 
-For integration testing with a live node, see the README for setup instructions.
+The Scope/Access tests in `tests/scope_access.rs` need a running dev node with CPS pallet 1.1 with the CPS view functions (Robonomics runtime v52, metadata V16). Start one from the `airalab/robonomics` repository with `nix develop -c ./scripts/development-chain.sh run`. They are `#[ignore]`d by default and read the node URL from `LIBCPS_TEST_WS` (default `ws://127.0.0.1:9944`); they sign with the `//Alice` and `//Bob` dev accounts:
+
+```bash
+LIBCPS_TEST_WS=ws://127.0.0.1:9944 \
+  cargo test -p libcps --test scope_access --no-default-features -- --ignored --test-threads=1
+```
+
+Effective permissions are verified through `NodeAccess::has_capability`, never by reading raw Access storage.
 
 ## Code Quality
 
@@ -138,8 +147,8 @@ rust-gdb target/debug/cps
 
 ### Core Dependencies
 
-- `subxt`: Substrate RPC client
-- `subxt-signer`: Account signing utilities
+- `subxt`: Substrate RPC client and light client (private backend; never exposed in the public API)
+- `robonomics-chain-spec`: embedded Polkadot relay and Robonomics parachain specs for light-client mode
 - `clap`: Command-line argument parsing (CLI only)
 - `tokio`: Async runtime
 - `anyhow`: Error handling
@@ -197,7 +206,7 @@ the runtime build and provides it as a dependency. This:
 
 The codebase is organized to separate library functionality from CLI:
 
-- **Library code** (`lib.rs`, `blockchain/`, `crypto/`, `node.rs`): Pure functionality, no colored output
+- **Library code** (`lib.rs`, `client.rs`, `node/`, `scope/`, `crypto/`, `backend/`): Pure functionality, no colored output
 - **CLI code** (`main.rs`, `commands/`, `display/`): User interface, pretty printing, argument parsing
 
 This allows:

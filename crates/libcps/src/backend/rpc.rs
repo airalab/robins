@@ -15,9 +15,14 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-use substrate_build_script_utils::{generate_cargo_keys, rerun_if_git_head_changed};
+//! Direct RPC connection.
 
-fn main() {
-    generate_cargo_keys();
-    rerun_if_git_head_changed();
+use super::Api;
+use crate::error::{Error, Result};
+
+/// Connect to a node RPC endpoint (`ws://`, `wss://`).
+pub(crate) async fn connect_rpc(url: &str) -> Result<Api> {
+    Api::from_url(url)
+        .await
+        .map_err(|e| Error::Connection(Box::new(e)))
 }

@@ -89,7 +89,7 @@ pub mod sensor_message {
 pub use sp_core::crypto::AccountId32;
 
 use prost::Message;
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use sp_core::crypto::{Pair as _, Ss58AddressFormat, Ss58Codec};
 use sp_core::ed25519::{Pair, Public, Signature};
@@ -325,7 +325,7 @@ impl SensorIdentity {
     /// Generate a new random identity from the operating system CSPRNG.
     pub fn generate() -> Self {
         let mut secret = [0u8; SENSOR_ID_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut secret);
+        rand::rng().fill_bytes(&mut secret);
         Self::from_secret_bytes(&secret)
     }
 
@@ -492,7 +492,7 @@ pub fn sign_message(
 ) -> SignedEnvelope {
     let nonce = options.nonce.unwrap_or_else(|| {
         let mut n = vec![0u8; DEFAULT_NONCE_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut n);
+        rand::rng().fill_bytes(&mut n);
         n
     });
 

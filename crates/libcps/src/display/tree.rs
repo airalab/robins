@@ -18,7 +18,7 @@
 //! Tree visualization utilities.
 
 use colored::*;
-use subxt::utils::AccountId32;
+use libcps::AccountId;
 
 fn format_data(data: &str) -> ColoredString {
     // Try to parse as JSON for pretty formatting
@@ -40,7 +40,7 @@ fn format_data(data: &str) -> ColoredString {
 /// Print a node in recursive tree format (for building full tree visualizations)
 pub fn print_node_recursive(
     node_id: u64,
-    owner: AccountId32,
+    owner: AccountId,
     meta: Option<&str>,
     payload: Option<&str>,
     prefix: &str,

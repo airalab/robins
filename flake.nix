@@ -16,7 +16,7 @@
 
   inputs = {
     systems.url = "github:nix-systems/default";
-    nixpkgs.url = "github:NixOS/nixpkgs/0af3d1402dec3fc7e93635e511d1f7428c89cebf";
+    nixpkgs.url = "github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30";
 
     fenix.url = "github:nix-community/fenix";
     fenix.inputs.nixpkgs.follows = "nixpkgs";
@@ -64,7 +64,7 @@
           default = self.lib.${system}.mkDevShell {
             packages = with pkgs; [
               openssl taplo actionlint cargo-nextest cargo-audit cargo-machete
-              psvm pkgs.polkadot polkadot-parachain
+              psvm pkgs.polkadot polkadot-parachain polkadot-omni-node
             ];
             env.RUSTC_WRAPPER = pkgs.lib.getExe pkgs.sccache;
           }; 
