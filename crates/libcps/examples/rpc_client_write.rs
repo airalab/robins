@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Send transactions to a locally running testnet over RPC.
 //!
 //! Start a development node first (the `robonomics` binary is built from the

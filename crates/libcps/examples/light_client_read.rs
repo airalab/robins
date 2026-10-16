@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Read the production chain with the embedded light client.
 //!
 //! No RPC endpoint and no keys are needed: [`Client::connect_light`] starts a
