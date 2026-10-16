@@ -20,7 +20,5 @@ echo ""
 
 docker run -v "${PROJECT_ROOT}":/build -i \
     -e SUBSTRATE_CLI_GIT_COMMIT_HASH="$(git rev-parse --short HEAD)" \
-    -e RUSTFLAGS="-Clink-arg=-lzstd" \
-    -e SKIP_FRAME_STORAGE_ACCESS_TEST_RUNTIME_WASM_BUILD=1 \
-    --rm $(docker build -q "${PROJECT_ROOT}/scripts/docker/builder") \
+    --rm $(docker build -q "${PROJECT_ROOT}/scripts/builder") \
     cargo build -v --locked --profile "${PROFILE}"

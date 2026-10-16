@@ -399,6 +399,17 @@ let tx = node.set_payload(parity_scale_codec::Encode::encode(&message))?;
 client.submit_finalized(&tx, &signer).await?;
 ```
 
+### Runnable examples
+
+See [`examples/`](examples/README.md):
+
+- `light_client_read` - read the production chain (CPS tree walk) with the embedded light client
+- `rpc_client_write` - send transactions to a local testnet over RPC
+
+```bash
+cargo run -p libcps --example light_client_read --no-default-features -- <ROOT_NODE_ID>
+cargo run -p libcps --example rpc_client_write --no-default-features
+```
 
 ## 🔐 Encryption
 
