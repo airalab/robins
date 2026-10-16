@@ -96,6 +96,10 @@ struct Cli {
     #[arg(long, env = "ROBONOMICS_WS_URL", default_value = "ws://localhost:9944")]
     ws_url: String,
 
+    /// Use the embedded light client instead of the RPC endpoint
+    #[arg(long, env = "ROBONOMICS_LIGHT_CLIENT")]
+    light_client: bool,
+
     /// Account secret URI (e.g., //Alice, //Bob, or seed phrase)
     #[arg(long, env = "ROBONOMICS_SURI")]
     suri: Option<String>,
@@ -268,7 +272,7 @@ async fn main() -> Result<()> {
 
     // Create blockchain config (crypto-free)
     let blockchain_config = mqtt::BlockchainConfig {
-        ws_url: cli.ws_url.clone(),
+        ws_url: (!cli.light_client).then(|| cli.ws_url.clone()),
         suri: cli.suri.clone(),
     };
 
@@ -346,7 +350,7 @@ async fn main() -> Result<()> {
             // Validate that blockchain config is present
             if mqtt_config.blockchain.is_none() {
                 return Err(anyhow::anyhow!(
-                    "Configuration file must include [blockchain] section with ws_url"
+                    "Configuration file must include [blockchain] section"
                 ));
             }
 

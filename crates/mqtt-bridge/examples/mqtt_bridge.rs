@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Configure blockchain connection
     let blockchain_config = BlockchainConfig {
-        ws_url: "ws://localhost:9944".to_string(),
+        ws_url: Some("ws://localhost:9944".to_string()),
         suri: Some("//Alice".to_string()),
     };
 
@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     // Parse and display MQTT broker details
     let (host, port) = mqtt::parse_mqtt_url(&mqtt_config.broker)?;
     println!("MQTT Broker: {}:{}", host, port);
-    println!("Blockchain: {}", blockchain_config.ws_url);
+    println!("Blockchain: {}", blockchain_config.endpoint());
     println!();
 
     // Example 1: Subscribe Bridge

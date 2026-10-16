@@ -63,7 +63,7 @@
         system: pkgs: rec {
           default = self.lib.${system}.mkDevShell {
             packages = with pkgs; [
-              openssl taplo actionlint cargo-nextest cargo-audit cargo-machete
+              taplo actionlint cargo-nextest cargo-audit cargo-machete
               psvm pkgs.polkadot polkadot-parachain polkadot-omni-node
             ];
             env.RUSTC_WRAPPER = pkgs.lib.getExe pkgs.sccache;

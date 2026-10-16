@@ -46,7 +46,7 @@ pub async fn subscribe<S: Scheme>(
 
     // Early validation
     let (host, port) = mqtt::parse_mqtt_url(&mqtt_config.broker)?;
-    display::info(&format!("Connected to {}", blockchain_config.ws_url));
+    display::info(&format!("Connected to {}", blockchain_config.endpoint()));
     display::info(&format!("Topic: {}", topic.bright_cyan()));
     display::info(&format!("Node: {}", node_id.to_string().bright_cyan()));
 
@@ -124,7 +124,7 @@ pub async fn publish(
     // Early validation
     let (host, port) = mqtt::parse_mqtt_url(&mqtt_config.broker)?;
 
-    display::info(&format!("Connected to {}", blockchain_config.ws_url));
+    display::info(&format!("Connected to {}", blockchain_config.endpoint()));
 
     display::progress(&format!("Connecting to MQTT broker {}:{}...", host, port));
 
