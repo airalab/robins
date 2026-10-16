@@ -39,7 +39,7 @@ jobs:
       status: ${{ job.status }}
     strategy:
       matrix:
-        package: [robonomics,libcps]
+        package: [libcps]
     steps:
       - uses: actions/checkout@v5
 
