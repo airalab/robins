@@ -53,7 +53,7 @@
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let blockchain_config = BlockchainConfig {
-//!     ws_url: "ws://localhost:9944".to_string(),
+//!     ws_url: Some("ws://localhost:9944".to_string()),
 //!     suri: Some("//Alice".to_string()),
 //! };
 //!

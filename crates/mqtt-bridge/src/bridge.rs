@@ -64,6 +64,7 @@
 //! password = "mypass"
 //!
 //! [blockchain]
+//! # Omit ws_url to use the embedded light client
 //! ws_url = "ws://localhost:9944"
 //! suri = "//Alice"
 //!
@@ -91,7 +92,7 @@
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let blockchain_config = BlockchainConfig {
-//!     ws_url: "ws://localhost:9944".to_string(),
+//!     ws_url: Some("ws://localhost:9944".to_string()),
 //!     suri: Some("//Alice".to_string()),
 //! };
 //!
@@ -149,7 +150,7 @@ use anyhow::{anyhow, Result};
 use libcps::crypto::{
     Cipher, EncryptedMessage, EncryptionAlgorithm, PublicKey, Scheme, Signer, Sr25519,
 };
-use libcps::{prelude::*, Client, NodeId};
+use libcps::{prelude::*, AccountId, Capability, Client, NodeId};
 use parity_scale_codec::Decode;
 use parity_scale_codec::Encode;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
@@ -197,19 +198,37 @@ fn is_false(b: &bool) -> bool {
 /// Blockchain connection settings used by the bridge functions.
 #[derive(Clone, Debug)]
 pub struct BlockchainConfig {
-    /// WebSocket URL of the node RPC endpoint
-    pub ws_url: String,
+    /// WebSocket URL of the node RPC endpoint.
+    ///
+    /// `None` starts the embedded light client instead of connecting to an RPC
+    /// node; the first queries then wait until the light client has synced.
+    pub ws_url: Option<String>,
     /// Account secret URI (e.g., //Alice or seed phrase)
     pub suri: Option<String>,
+}
+
+impl BlockchainConfig {
+    /// Human-readable description of the chain endpoint, for logs and CLI output.
+    pub fn endpoint(&self) -> &str {
+        self.ws_url.as_deref().unwrap_or("embedded light client")
+    }
+
+    /// Connect to the chain over RPC, or through the light client when no
+    /// `ws_url` is configured.
+    async fn connect(&self) -> libcps::Result<Client> {
+        Client::connect(self.ws_url.as_deref()).await
+    }
 }
 
 /// Blockchain connection configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockchainConfigData {
-    /// WebSocket URL for blockchain connection
-    pub ws_url: String,
+    /// WebSocket URL for blockchain connection; omit it to use the embedded
+    /// light client
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ws_url: Option<String>,
     /// Account secret URI (e.g., //Alice or seed phrase)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suri: Option<String>,
 }
 
@@ -307,8 +326,8 @@ impl Config {
             .ok_or_else(|| anyhow!("Blockchain configuration required in config file"))?;
 
         debug!(
-            "Blockchain config: ws_url={}, suri={}",
-            blockchain_data.ws_url,
+            "Blockchain config: endpoint={}, suri={}",
+            blockchain_data.ws_url.as_deref().unwrap_or("light client"),
             if blockchain_data.suri.is_some() {
                 "present"
             } else {
@@ -464,7 +483,9 @@ impl Config {
     ///
     /// # Returns
     ///
-    /// This function runs indefinitely and only returns on fatal errors.
+    /// This function runs indefinitely and only returns on fatal errors. It fails
+    /// at startup if the node does not exist or the signer account has no
+    /// `Capability::Write` access to it.
     ///
     /// # Examples
     ///
@@ -473,7 +494,7 @@ impl Config {
     /// # use mqtt_bridge as mqtt;
     /// # async fn example() -> anyhow::Result<()> {
     /// let blockchain_config = BlockchainConfig {
-    ///     ws_url: "ws://localhost:9944".to_string(),
+    ///     ws_url: Some("ws://localhost:9944".to_string()),
     ///     suri: Some("//Alice".to_string()),
     /// };
     ///
@@ -520,10 +541,17 @@ impl Config {
         );
 
         // Connect to blockchain
-        trace!("Connecting to blockchain at {}", blockchain_config.ws_url);
-        let client = Client::connect(Some(&blockchain_config.ws_url)).await?;
+        trace!(
+            "Connecting to blockchain at {}",
+            blockchain_config.endpoint()
+        );
+        let client = blockchain_config.connect().await?;
         let signer = signer(blockchain_config)?;
         debug!("Connected to blockchain successfully");
+
+        // Fail fast instead of finalizing a rejected transaction for every message
+        let node = NodeId::from(node_id);
+        ensure_can_write(&client, node, &signer.account_id()).await?;
 
         // Parse MQTT broker URL
         let (host, port) = parse_mqtt_url(&self.broker)?;
@@ -552,8 +580,6 @@ impl Config {
             .subscribe(topic, QoS::AtMostOnce)
             .await
             .map_err(|e| anyhow!("Failed to subscribe to topic: {}", e))?;
-
-        let node = NodeId::from(node_id);
 
         // Process MQTT events
         debug!("Starting MQTT event loop for topic '{}'", topic);
@@ -607,14 +633,25 @@ impl Config {
                     // Update node payload on blockchain
                     debug!("Updating node {} payload on blockchain", node_id);
                     let submitted = match node.set_payload(node_data) {
-                        Ok(tx) => client.submit_finalized(&tx, &signer).await.map(|_| ()),
+                        Ok(tx) => client.submit_finalized(&tx, &signer).await,
                         Err(e) => Err(e),
                     };
-                    if let Err(e) = submitted {
-                        // Blockchain update failed, log error and continue
-                        error!("Failed to update node payload: {}", e);
-                    } else {
-                        trace!("Node {} payload updated successfully", node_id);
+                    // A failed update is logged and the bridge keeps running
+                    match submitted {
+                        Ok(receipt) => debug!(
+                            "Node {} payload updated: extrinsic {}, finalized in block {}",
+                            node_id, receipt.extrinsic_hash, receipt.block_hash
+                        ),
+                        Err(libcps::Error::PayloadTooLarge { actual, max }) => error!(
+                            "Dropped message for node {}: payload is {} bytes, the maximum is {}",
+                            node_id, actual, max
+                        ),
+                        Err(libcps::Error::AccessDenied) => error!(
+                            "Access to node {} was revoked for {}: payload not updated",
+                            node_id,
+                            signer.account_id()
+                        ),
+                        Err(e) => error!("Failed to update node payload: {}", e),
                     }
                 }
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
@@ -661,7 +698,7 @@ impl Config {
     /// # use mqtt_bridge as mqtt;
     /// # async fn example() -> anyhow::Result<()> {
     /// let blockchain_config = BlockchainConfig {
-    ///     ws_url: "ws://localhost:9944".to_string(),
+    ///     ws_url: Some("ws://localhost:9944".to_string()),
     ///     suri: Some("//Alice".to_string()),
     /// };
     ///
@@ -694,7 +731,7 @@ impl Config {
         publish_handler: Option<PublishHandler>,
     ) -> Result<()> {
         // Connect to blockchain
-        let client = Client::connect(Some(&blockchain_config.ws_url)).await?;
+        let client = blockchain_config.connect().await?;
 
         // Parse MQTT broker URL
         let (host, port) = parse_mqtt_url(&self.broker)?;
@@ -776,8 +813,9 @@ impl Config {
         while let Some(update) = watcher.next().await {
             let update = match update {
                 Ok(update) => update,
-                Err(_e) => {
-                    // Failed to process a block, skip
+                Err(e) => {
+                    // A failure concerns a single block: log it and keep watching
+                    error!("Failed to process finalized block: {}", e);
                     continue;
                 }
             };
@@ -821,7 +859,6 @@ const MQTT_RECONNECT_DELAY_SECS: u64 = 5;
 ///
 /// Supports both SS58 addresses and hex-encoded 32-byte keys.
 fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
-    use libcps::AccountId;
     use std::str::FromStr;
 
     // Try SS58 decoding with AccountId (works for both Sr25519 and Ed25519)
@@ -899,6 +936,26 @@ pub type MessageHandler = Box<dyn Fn(&str, &[u8]) + Send + Sync>;
 /// Arguments: (topic, block_number, data)
 pub type PublishHandler = Box<dyn Fn(&str, u64, &str) + Send + Sync>;
 
+/// Check that `account` may write the payload of `node`.
+///
+/// # Errors
+///
+/// Fails if the node does not exist or the runtime denies `Capability::Write`.
+async fn ensure_can_write(client: &Client, node: NodeId, account: &AccountId) -> Result<()> {
+    if node
+        .has_capability(client, account, Capability::Write)
+        .await?
+    {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Account {} has no write access to node {}",
+            account,
+            node
+        ))
+    }
+}
+
 /// Transaction signer from the configured SURI.
 fn signer(config: &BlockchainConfig) -> Result<Signer<Sr25519>> {
     let suri = config
@@ -950,4 +1007,77 @@ macro_rules! with_scheme {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blockchain_config_without_ws_url_uses_light_client() {
+        let config: Config = toml::from_str(
+            r#"
+            broker = "mqtt://localhost:1883"
+
+            [blockchain]
+            suri = "//Alice"
+            "#,
+        )
+        .unwrap();
+
+        let blockchain = config.blockchain.unwrap();
+        assert_eq!(blockchain.ws_url, None);
+        assert_eq!(blockchain.suri.as_deref(), Some("//Alice"));
+    }
+
+    #[test]
+    fn blockchain_config_with_ws_url_uses_rpc() {
+        let config: Config = toml::from_str(
+            r#"
+            broker = "mqtt://localhost:1883"
+
+            [blockchain]
+            ws_url = "ws://localhost:9944"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.blockchain.unwrap().ws_url.as_deref(),
+            Some("ws://localhost:9944")
+        );
+    }
+
+    #[test]
+    fn endpoint_describes_connection_mode() {
+        let rpc = BlockchainConfig {
+            ws_url: Some("ws://node:9944".to_string()),
+            suri: None,
+        };
+        let light = BlockchainConfig {
+            ws_url: None,
+            suri: None,
+        };
+        assert_eq!(rpc.endpoint(), "ws://node:9944");
+        assert_eq!(light.endpoint(), "embedded light client");
+    }
+
+    #[test]
+    fn mqtt_url_defaults_to_port_1883() {
+        assert_eq!(
+            parse_mqtt_url("mqtt://broker").unwrap(),
+            ("broker".to_string(), 1883)
+        );
+        assert!(parse_mqtt_url("mqtt://broker:port").is_err());
+    }
+
+    #[test]
+    fn crypto_scheme_parses_names() {
+        assert_eq!("sr".parse::<CryptoScheme>().unwrap(), CryptoScheme::Sr25519);
+        assert_eq!(
+            "ED25519".parse::<CryptoScheme>().unwrap(),
+            CryptoScheme::Ed25519
+        );
+        assert!("rsa".parse::<CryptoScheme>().is_err());
+    }
 }

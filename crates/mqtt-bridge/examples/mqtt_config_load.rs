@@ -48,7 +48,10 @@ fn main() -> anyhow::Result<()> {
     // Display blockchain configuration
     if let Some(blockchain) = &config.blockchain {
         println!("🔗 Blockchain Configuration:");
-        println!("   WS URL: {}", blockchain.ws_url);
+        println!(
+            "   WS URL: {}",
+            blockchain.ws_url.as_deref().unwrap_or("(light client)")
+        );
         if let Some(suri) = &blockchain.suri {
             println!("   SURI: {}", suri);
         }
