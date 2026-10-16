@@ -24,7 +24,6 @@ use crate::{
     transaction::{Progress, Transaction},
     types::Hash,
 };
-use parity_scale_codec::Decode;
 
 /// Handle to a Robonomics node, over a direct RPC connection or an embedded
 /// light client.
@@ -83,6 +82,11 @@ impl Client {
         self.api.at_current_block().await.map_err(Error::runtime)
     }
 
+    /// Chain state at the block with the given hash.
+    pub(crate) async fn at_block(&self, block_hash: Hash) -> Result<At> {
+        self.api.at_block(block_hash).await.map_err(Error::runtime)
+    }
+
     /// Hash of the latest finalized block.
     ///
     /// # Errors
@@ -90,18 +94,6 @@ impl Client {
     /// [`Error::Runtime`] if the finalized block cannot be fetched.
     pub async fn finalized_block_hash(&self) -> Result<Hash> {
         Ok(self.at_finalized().await?.block_hash())
-    }
-
-    /// Call the `CpsApi_<method>` runtime API and decode its SCALE result.
-    pub(crate) async fn cps_api<R: Decode>(at: &At, method: &str, args: Vec<u8>) -> Result<R> {
-        let function = format!("CpsApi_{method}");
-        let bytes = at
-            .runtime_apis()
-            .call_raw(&function, Some(&args))
-            .await
-            .map_err(|e| Error::runtime(format!("{function} failed: {e}")))?;
-        R::decode(&mut &bytes[..])
-            .map_err(|e| Error::runtime(format!("failed to decode {function} result: {e}")))
     }
 
     /// Sign `tx` with `signer` and submit it, without waiting for inclusion.

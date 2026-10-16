@@ -346,7 +346,7 @@ Metadata (1024 bytes) and payload (8192 bytes) are validated when the transactio
 
 Ownership belongs to a *Scope*, not to a node. A Scope is rooted at a node and owned by one account; nodes without their own Scope resolve to the Scope of their nearest ancestor that has one.
 
-The library does not reimplement Scope resolution or authorization. It calls the runtime's `CpsApi` (`resolve_scope`, `has_capability`) and leaves authorization of every mutation to the runtime, so a rejected transaction surfaces as an error (`Error::AccessDenied` for authorization failures).
+The library does not reimplement Scope resolution or authorization. It calls the CPS pallet view functions (`resolve_scope`, `has_capability`; runtime metadata V16) and leaves authorization of every mutation to the runtime, so a rejected transaction surfaces as an error (`Error::AccessDenied` for authorization failures).
 
 ```rust
 use libcps::{prelude::*, Access, Capability};
@@ -373,10 +373,10 @@ client
     .await?;
 ```
 
-- Reads use the latest finalized block.
+- Reads use the latest finalized block. Every read has an `*_at(client, block_hash)` variant (`info_at`, `meta_at`, `payload_at`, `children_at`, `resolve_scope_at`, `has_capability_at`, `ScopeId::info_at`) that reads and calls the runtime at exactly that block.
+- `has_capability` fails with `Error::NodeNotFound` for a missing node.
+- `create_node` is always sent without a node identity; the identity interface is not part of this API yet.
 - Nodes cannot be moved, and a Scope is deleted only together with its root node.
-
-> **Note:** The published runtime metadata does not describe the `CpsApi` runtime API, so libcps calls `CpsApi_resolve_scope` and `CpsApi_has_capability` by name and decodes the SCALE result itself.
 
 ### Signing and encryption
 

@@ -17,34 +17,24 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! Node-relative scope operations.
 
+use crate::api::runtime_types::pallet_robonomics_cps as rt;
 use crate::{
+    api,
+    backend::At,
     client::Client,
     error::{Error, Result},
     transaction::{self, Transaction},
-    types::{NodeId, ResolvedScope, ScopeId},
+    types::{Hash, NodeId, ResolvedScope, ScopeId},
 };
-use parity_scale_codec::{Decode, Encode};
 use std::future::Future;
 
-/// SCALE wire format of the `CpsApi::resolve_scope` result.
-///
-/// The runtime metadata carries no runtime API descriptions, so the API is
-/// called by name and its result decoded here.
-#[derive(Decode)]
-struct ResolvedScopeWire {
-    id: crate::api::runtime_types::pallet_robonomics_cps::ScopeId,
-    root: crate::api::runtime_types::pallet_robonomics_cps::NodeId,
-    owner: crate::types::AccountId,
-    path: Vec<crate::api::runtime_types::pallet_robonomics_cps::NodeId>,
-}
-
-impl From<ResolvedScopeWire> for ResolvedScope {
-    fn from(wire: ResolvedScopeWire) -> Self {
+impl From<rt::ResolvedScope<crate::types::AccountId>> for ResolvedScope {
+    fn from(scope: rt::ResolvedScope<crate::types::AccountId>) -> Self {
         Self {
-            id: wire.id.into(),
-            root: wire.root.into(),
-            owner: wire.owner,
-            path: wire.path.into_iter().map(NodeId::from).collect(),
+            id: scope.id.into(),
+            root: scope.root.into(),
+            owner: scope.owner,
+            path: scope.path.0.into_iter().map(NodeId::from).collect(),
         }
     }
 }
@@ -52,11 +42,19 @@ impl From<ResolvedScopeWire> for ResolvedScope {
 /// Scope resolution and creation, relative to a node.
 pub trait NodeScope {
     /// Scope this node belongs to, at the latest finalized block, as resolved by
-    /// the runtime (`CpsApi::resolve_scope`).
+    /// the runtime (the CPS `resolve_scope` view function).
     ///
     /// Fails with [`Error::NodeNotFound`] if the node does not exist (or no scope
     /// can be resolved for it).
     fn resolve_scope(&self, client: &Client) -> impl Future<Output = Result<ResolvedScope>> + Send;
+
+    /// As [`resolve_scope`](NodeScope::resolve_scope), at the block with hash
+    /// `block_hash`.
+    fn resolve_scope_at(
+        &self,
+        client: &Client,
+        block_hash: Hash,
+    ) -> impl Future<Output = Result<ResolvedScope>> + Send;
 
     /// Build a transaction creating a scope at this node.
     ///
@@ -68,10 +66,11 @@ pub trait NodeScope {
 
 impl NodeScope for NodeId {
     async fn resolve_scope(&self, client: &Client) -> Result<ResolvedScope> {
-        let at = client.at_finalized().await?;
-        let resolved: Option<ResolvedScopeWire> =
-            Client::cps_api(&at, "resolve_scope", self.rt().encode()).await?;
-        resolved.map(Into::into).ok_or(Error::NodeNotFound(*self))
+        resolve(*self, &client.at_finalized().await?).await
+    }
+
+    async fn resolve_scope_at(&self, client: &Client, block_hash: Hash) -> Result<ResolvedScope> {
+        resolve(*self, &client.at_block(block_hash).await?).await
     }
 
     fn create_scope(&self) -> Transaction<ScopeId> {
@@ -79,26 +78,35 @@ impl NodeScope for NodeId {
     }
 }
 
+/// Scope of `node` resolved by the runtime at the block `at`.
+async fn resolve(node: NodeId, at: &At) -> Result<ResolvedScope> {
+    let resolved = at
+        .view_functions()
+        .call(api::view_functions().cps().resolve_scope(node.rt()))
+        .await
+        .map_err(Error::runtime)?;
+    super::view_result(node, resolved).map(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::runtime_types::pallet_robonomics_cps as rt;
+    use crate::api::runtime_types::{
+        bounded_collections::bounded_vec::BoundedVec, pallet_robonomics_cps as rt,
+    };
 
     #[test]
-    fn resolved_scope_wire_format_decodes() {
+    fn runtime_resolved_scope_converts() {
         let owner = crate::types::AccountId::from([7u8; 32]);
-        let encoded = (
-            rt::ScopeId(3),
-            rt::NodeId(5),
+        let runtime = rt::ResolvedScope {
+            id: rt::ScopeId(3),
+            root: rt::NodeId(5),
             owner,
-            vec![rt::NodeId(9), rt::NodeId(5)],
-        )
-            .encode();
-
-        let resolved: ResolvedScope = ResolvedScopeWire::decode(&mut &encoded[..]).unwrap().into();
+            path: BoundedVec(vec![rt::NodeId(9), rt::NodeId(5)]),
+        };
 
         assert_eq!(
-            resolved,
+            ResolvedScope::from(runtime),
             ResolvedScope {
                 id: ScopeId(3),
                 root: NodeId(5),
@@ -109,9 +117,15 @@ mod tests {
     }
 
     #[test]
-    fn missing_scope_decodes_to_none() {
-        assert!(Option::<ResolvedScopeWire>::decode(&mut &[0u8][..])
-            .unwrap()
-            .is_none());
+    fn missing_node_maps_to_node_not_found() {
+        use rt::pallet::Error as PalletError;
+
+        let err =
+            super::super::view_result::<()>(NodeId(4), Err(PalletError::NodeNotFound)).unwrap_err();
+        assert!(matches!(err, Error::NodeNotFound(NodeId(4))));
+
+        let err = super::super::view_result::<()>(NodeId(4), Err(PalletError::ScopeNotFound))
+            .unwrap_err();
+        assert!(matches!(err, Error::Runtime(_)));
     }
 }

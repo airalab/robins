@@ -82,5 +82,5 @@ libp2p = { version = "0.57.0", features = [
   "ed25519",
 ] }
 robonomics-chain-spec = "2.0.0"
-robonomics-runtime-subxt-api = "51.0.0"
+robonomics-runtime-subxt-api = "52.1.0"
 libcps = { version = "0.7.0", path = "./crates/libcps", default-features = false }

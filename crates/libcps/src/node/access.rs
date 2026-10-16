@@ -18,12 +18,13 @@
 //! Node-relative authorization.
 
 use crate::{
+    api,
+    backend::At,
     client::Client,
-    error::Result,
+    error::{Error, Result},
     transaction::{self, Transaction},
-    types::{Access, AccountId, Capability, NodeId},
+    types::{Access, AccountId, Capability, Hash, NodeId},
 };
-use parity_scale_codec::Encode;
 use std::future::Future;
 
 /// Authorization questions and mutations, relative to a node.
@@ -31,18 +32,30 @@ use std::future::Future;
 /// Grants apply from a specific node within the scope the node resolves to.
 pub trait NodeAccess {
     /// Whether `account` may use `capability` at this node, as decided by the
-    /// runtime (`CpsApi::has_capability`) at the latest finalized block.
+    /// runtime (the CPS `has_capability` view function) at the latest finalized block.
     ///
     /// This applies the same checks as the pallet calls that require the
     /// capability (ownership of the node's scope, access entries, and for
     /// [`Capability::CreateScope`] ownership of the enclosing scope at a nested scope
-    /// root), so prefer it over reading raw authorization storage. It returns
-    /// `false` if the node does not exist.
+    /// root), so prefer it over reading raw authorization storage.
+    ///
+    /// Fails with [`Error::NodeNotFound`] if the node does not exist (metadata V16
+    /// view function semantics).
     fn has_capability(
         &self,
         client: &Client,
         account: &AccountId,
         capability: Capability,
+    ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// As [`has_capability`](NodeAccess::has_capability), at the block with hash
+    /// `block_hash`.
+    fn has_capability_at(
+        &self,
+        client: &Client,
+        account: &AccountId,
+        capability: Capability,
+        block_hash: Hash,
     ) -> impl Future<Output = Result<bool>> + Send;
 
     /// Build a transaction granting `access` to `account` at this node, within
@@ -68,13 +81,21 @@ impl NodeAccess for NodeId {
         account: &AccountId,
         capability: Capability,
     ) -> Result<bool> {
-        let at = client.at_finalized().await?;
-        let capability: crate::api::runtime_types::pallet_robonomics_cps::Capability =
-            capability.into();
-        Client::cps_api(
-            &at,
-            "has_capability",
-            (self.rt(), *account, capability).encode(),
+        check(*self, account, capability, &client.at_finalized().await?).await
+    }
+
+    async fn has_capability_at(
+        &self,
+        client: &Client,
+        account: &AccountId,
+        capability: Capability,
+        block_hash: Hash,
+    ) -> Result<bool> {
+        check(
+            *self,
+            account,
+            capability,
+            &client.at_block(block_hash).await?,
         )
         .await
     }
@@ -86,4 +107,18 @@ impl NodeAccess for NodeId {
     fn revoke(&self, account: AccountId, capability: Capability) -> Result<Transaction<()>> {
         Ok(transaction::revoke_access(*self, account, capability))
     }
+}
+
+/// Whether `account` holds `capability` at `node`, as decided by the runtime at the block `at`.
+async fn check(node: NodeId, account: &AccountId, capability: Capability, at: &At) -> Result<bool> {
+    let result = at
+        .view_functions()
+        .call(
+            api::view_functions()
+                .cps()
+                .has_capability(node.rt(), *account, capability.into()),
+        )
+        .await
+        .map_err(Error::runtime)?;
+    super::view_result(node, result)
 }

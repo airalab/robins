@@ -19,10 +19,11 @@
 
 use crate::{
     api,
+    backend::At,
     client::Client,
     error::{Error, Result},
     transaction::{self, Transaction},
-    types::{CreateNode, NodeId},
+    types::{CreateNode, Hash, NodeId},
 };
 use std::future::Future;
 
@@ -34,6 +35,13 @@ pub trait NodeTree {
     /// Direct children of the node, empty if there are none (or the node does
     /// not exist).
     fn children(&self, client: &Client) -> impl Future<Output = Result<Vec<NodeId>>> + Send;
+
+    /// As [`children`](NodeTree::children), at the block with hash `block_hash`.
+    fn children_at(
+        &self,
+        client: &Client,
+        block_hash: Hash,
+    ) -> impl Future<Output = Result<Vec<NodeId>>> + Send;
 
     /// Build a transaction creating a child node under this node.
     ///
@@ -53,22 +61,11 @@ pub trait NodeTree {
 
 impl NodeTree for NodeId {
     async fn children(&self, client: &Client) -> Result<Vec<NodeId>> {
-        let at = client.at_finalized().await?;
-        let children = at
-            .storage()
-            .try_fetch(api::storage().cps().children(), (self.rt(),))
-            .await
-            .map_err(Error::runtime)?;
-        match children {
-            Some(value) => Ok(value
-                .decode()
-                .map_err(Error::runtime)?
-                .0
-                .into_iter()
-                .map(NodeId::from)
-                .collect()),
-            None => Ok(Vec::new()),
-        }
+        fetch_children(*self, &client.at_finalized().await?).await
+    }
+
+    async fn children_at(&self, client: &Client, block_hash: Hash) -> Result<Vec<NodeId>> {
+        fetch_children(*self, &client.at_block(block_hash).await?).await
     }
 
     fn create_child(&self, params: CreateNode) -> Result<Transaction<NodeId>> {
@@ -77,6 +74,25 @@ impl NodeTree for NodeId {
 
     fn delete(&self) -> Transaction<()> {
         transaction::delete_node(*self)
+    }
+}
+
+/// Children of `node` at the block `at`.
+async fn fetch_children(node: NodeId, at: &At) -> Result<Vec<NodeId>> {
+    let children = at
+        .storage()
+        .try_fetch(api::storage().cps().children(), (node.rt(),))
+        .await
+        .map_err(Error::runtime)?;
+    match children {
+        Some(value) => Ok(value
+            .decode()
+            .map_err(Error::runtime)?
+            .0
+            .into_iter()
+            .map(NodeId::from)
+            .collect()),
+        None => Ok(Vec::new()),
     }
 }
 

@@ -91,7 +91,7 @@ cargo test -p libcps --lib --no-default-features
 
 ### Integration Testing
 
-The Scope/Access tests in `tests/scope_access.rs` need a running dev node with CPS pallet 1.0 and the `CpsApi` runtime API. They are `#[ignore]`d by default and read the node URL from `LIBCPS_TEST_WS` (default `ws://127.0.0.1:9944`); they sign with the `//Alice` and `//Bob` dev accounts:
+The Scope/Access tests in `tests/scope_access.rs` need a running dev node with CPS pallet 1.1 with the CPS view functions (Robonomics runtime v52, metadata V16). Start one from the `airalab/robonomics` repository with `nix develop -c ./scripts/development-chain.sh run`. They are `#[ignore]`d by default and read the node URL from `LIBCPS_TEST_WS` (default `ws://127.0.0.1:9944`); they sign with the `//Alice` and `//Bob` dev accounts:
 
 ```bash
 LIBCPS_TEST_WS=ws://127.0.0.1:9944 \

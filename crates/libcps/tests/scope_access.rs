@@ -1,7 +1,7 @@
 //! Live-node integration tests for the CPS Scope/Access API.
 //!
-//! These tests need a running Robonomics dev node with CPS pallet 1.0 and the
-//! `CpsApi` runtime API, so they are `#[ignore]`d by default:
+//! These tests need a running Robonomics dev node with CPS pallet 1.1 with the CPS
+//! view functions (runtime v52, metadata V16), so they are `#[ignore]`d by default:
 //!
 //! ```text
 //! LIBCPS_TEST_WS=ws://127.0.0.1:9944 \
@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Effective permissions are always verified through
-//! `NodeAccess::has_capability` (the `CpsApi` runtime API), never by reading
+//! `NodeAccess::has_capability` (the CPS view function), never by reading
 //! raw Access storage.
 
 use libcps::crypto::{Signer, Sr25519};
@@ -113,6 +113,12 @@ async fn missing_node_is_reported() {
         missing.resolve_scope(&client).await,
         Err(libcps::Error::NodeNotFound(id)) if id == missing
     ));
+    assert!(matches!(
+        missing
+            .has_capability(&client, &keypair("//Alice").account_id(), Capability::Write)
+            .await,
+        Err(libcps::Error::NodeNotFound(id)) if id == missing
+    ));
 }
 
 #[tokio::test]
@@ -134,6 +140,42 @@ async fn set_and_clear_data() {
         .await
         .unwrap();
     assert!(node.payload(&client).await.unwrap().is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires a live dev node"]
+async fn historical_reads_are_block_consistent() {
+    let client = connect().await;
+    let alice = keypair("//Alice");
+    let alice_id = alice.account_id();
+    let node = create(&client, &alice, None).await;
+
+    let first = client
+        .submit_finalized(&node.set_payload(b"one").unwrap(), &alice)
+        .await
+        .unwrap()
+        .block_hash;
+    client
+        .submit_finalized(&node.set_payload(b"two").unwrap(), &alice)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        node.payload_at(&client, first).await.unwrap().unwrap(),
+        b"one"
+    );
+    assert_eq!(node.payload(&client).await.unwrap().unwrap(), b"two");
+    assert!(node.info_at(&client, first).await.unwrap().is_some());
+    assert!(node.children_at(&client, first).await.unwrap().is_empty());
+
+    let scope = node.resolve_scope_at(&client, first).await.unwrap();
+    assert_eq!(scope.root, node);
+    assert_eq!(scope.owner, alice_id);
+    assert!(scope.id.info_at(&client, first).await.unwrap().is_some());
+    assert!(node
+        .has_capability_at(&client, &alice_id, Capability::Write, first)
+        .await
+        .unwrap());
 }
 
 #[tokio::test]

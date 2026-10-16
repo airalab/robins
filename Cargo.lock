@@ -5426,15 +5426,15 @@ checksum = "36f49019f0c00eb2eb22fc6c7422534e0651ee2261c15c4683c6c333ce624a10"
 
 [[package]]
 name = "robonomics-runtime-metadata"
-version = "51.0.0"
+version = "52.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78b6ee2d98bc7b70aaded10729e576c589741753e8551fdc995003c207d05916"
+checksum = "c01af5cce540b0924ea277f95f884868ca3eeafa1dd83b82d99d69490bb060f5"
 
 [[package]]
 name = "robonomics-runtime-subxt-api"
-version = "51.0.0"
+version = "52.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cefa7a2076835e83f20e3381e54b1c024d6d64da40a08a824b60eafc5d60c78a"
+checksum = "7a4a07fde407d1a2d817e0b9d7c431ab4e4e64d6865e25efd496856c8ea6ab86"
 dependencies = [
  "parity-scale-codec",
  "robonomics-runtime-metadata",

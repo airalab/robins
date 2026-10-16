@@ -198,7 +198,7 @@ pub struct ScopeInfo {
 }
 
 /// Snapshot of the scope a node resolves to, as reported by the runtime
-/// (`CpsApi::resolve_scope`).
+/// (the CPS `resolve_scope` view function).
 ///
 /// This is data, not an active object.
 #[derive(Clone, Debug, PartialEq, Eq)]

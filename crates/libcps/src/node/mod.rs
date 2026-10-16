@@ -34,3 +34,20 @@ pub use scope::NodeScope;
 pub use tree::{create_root, NodeTree};
 pub use watch::{MetaUpdate, MetaWatcher, PayloadUpdate, PayloadWatcher};
 pub use write::NodeWrite;
+
+use crate::{
+    api::runtime_types::pallet_robonomics_cps::pallet::Error as PalletError,
+    error::{Error, Result},
+    types::NodeId,
+};
+
+/// Unwrap the result of a CPS view function that failed with a pallet error.
+///
+/// `NodeNotFound` becomes [`Error::NodeNotFound`]; any other pallet error is
+/// reported as [`Error::Runtime`].
+pub(crate) fn view_result<T>(node: NodeId, result: Result<T, PalletError>) -> Result<T> {
+    result.map_err(|e| match e {
+        PalletError::NodeNotFound => Error::NodeNotFound(node),
+        other => Error::runtime(format!("CPS view function failed: {other:?}")),
+    })
+}

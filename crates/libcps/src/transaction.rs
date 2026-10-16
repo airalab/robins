@@ -122,7 +122,8 @@ impl<T> Transaction<T> {
             } => send!(cps.create_node(
                 parent.map(Into::into),
                 meta.map(BoundedVec),
-                payload.map(BoundedVec)
+                payload.map(BoundedVec),
+                None
             )),
             Call::SetMeta(id, meta) => send!(cps.set_meta(id.into(), meta.map(BoundedVec))),
             Call::SetPayload(id, payload) => {
