@@ -17,7 +17,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! Read the production chain with the embedded light client.
 //!
-//! No RPC endpoint and no keys are needed: [`Client::connect_light`] starts a
+//! No RPC endpoint and no keys are needed: [`Cps::connect_light`] starts a
 //! light client for the Polkadot relay chain and the Robonomics parachain
 //! (chain specs are embedded in `robonomics-chain-spec`) and syncs over p2p.
 //! The first run may take a while until a finalized block is available.
@@ -31,7 +31,7 @@
 //! CPS_ROOT_NODE=<ROOT_NODE_ID> cargo run -p libcps --example light_client_read --no-default-features
 //! ```
 
-use libcps::{prelude::*, Client, Error, Hash, NodeId};
+use libcps::{CpsAt, Error, NodeId};
 use std::{future::Future, pin::Pin};
 
 /// Longest value, in bytes, printed in full; longer values are cut.
@@ -50,32 +50,32 @@ fn render(data: &[u8]) -> String {
     text
 }
 
-/// Print `node` and its descendants, reading the state at block `block`.
+/// Print `node` and its descendants, reading the state of the pinned block `at`.
 ///
 /// Recursion in `async fn` needs a boxed future.
 fn print_tree<'a>(
-    client: &'a Client,
-    block: Hash,
+    at: &'a CpsAt,
     node: NodeId,
     depth: usize,
 ) -> Pin<Box<dyn Future<Output = libcps::Result<()>> + 'a>> {
     Box::pin(async move {
-        if node.info_at(client, block).await?.is_none() {
+        let handle = at.node(node);
+        if handle.info().await?.is_none() {
             return Err(Error::NodeNotFound(node));
         }
 
         let indent = "  ".repeat(depth);
-        let scope = node.resolve_scope_at(client, block).await?;
+        let scope = handle.resolve_scope().await?;
         println!("{indent}[node {node}] owner: {}", scope.owner);
-        if let Some(meta) = node.meta_at(client, block).await? {
+        if let Some(meta) = handle.meta().await? {
             println!("{indent}  meta:    {}", render(&meta));
         }
-        if let Some(payload) = node.payload_at(client, block).await? {
+        if let Some(payload) = handle.payload().await? {
             println!("{indent}  payload: {}", render(&payload));
         }
 
-        for child in node.children_at(client, block).await? {
-            print_tree(client, block, child, depth + 1).await?;
+        for child in handle.children().await? {
+            print_tree(at, child, depth + 1).await?;
         }
         Ok(())
     })
@@ -91,11 +91,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("invalid root node id: {e}"))?;
 
     println!("Starting light client, waiting for the first finalized block...");
-    let client = Client::connect_light().await?;
+    let cps = libcps::Cps::connect_light().await?;
 
-    let block = client.finalized_block_hash().await?;
-    println!("Synced, reading at finalized block {block:?}\n");
+    let at = cps.finalized().await?;
+    println!("Synced, reading at finalized block {:?}\n", at.block_hash());
 
-    print_tree(&client, block, NodeId::from(root), 0).await?;
+    print_tree(&at, NodeId::from(root), 0).await?;
     Ok(())
 }

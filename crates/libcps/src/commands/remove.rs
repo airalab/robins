@@ -21,21 +21,22 @@ use super::Connection;
 use crate::display;
 use anyhow::Result;
 use colored::*;
-use libcps::{prelude::*, NodeId};
+use libcps::NodeId;
 use std::io::{self, Write};
 
 /// Delete `node_id`; refuses when it has children, and asks for confirmation
 /// unless `force` is set.
 pub async fn execute(connection: &Connection, node_id: u64, force: bool) -> Result<()> {
-    let client = connection.client().await?;
+    let cps = connection.client().await?;
     let signer = connection.signer()?;
 
-    let node = NodeId::from(node_id);
-    if node.info(&client).await?.is_none() {
-        return Err(libcps::Error::NodeNotFound(node).into());
+    let id = NodeId::from(node_id);
+    let node = cps.node(id);
+    if node.info().await?.is_none() {
+        return Err(libcps::Error::NodeNotFound(id).into());
     }
 
-    let children = node.children(&client).await?;
+    let children = node.children().await?;
     if !children.is_empty() {
         return Err(anyhow::anyhow!(
             "Cannot delete node with {} children. Remove the children first",
@@ -63,7 +64,7 @@ pub async fn execute(connection: &Connection, node_id: u64, force: bool) -> Resu
     let tx = node.delete();
 
     let spinner = display::spinner("Submitting transaction...");
-    let receipt = client.submit_finalized(&tx, &signer).await;
+    let receipt = cps.submit_finalized(&tx, &signer).await;
     spinner.finish_and_clear();
     receipt?;
 

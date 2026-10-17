@@ -26,7 +26,7 @@ pub mod show;
 use crate::display;
 use anyhow::Result;
 use libcps::crypto::{Cipher, EncryptionAlgorithm, PublicKey, Scheme, Signer, Sr25519};
-use libcps::{AccountId, Client};
+use libcps::{AccountId, Cps};
 use parity_scale_codec::Encode;
 
 /// Connection settings shared by all commands.
@@ -40,9 +40,9 @@ pub struct Connection {
 
 impl Connection {
     /// Connect to the chain, reporting progress.
-    pub async fn client(&self) -> Result<Client> {
+    pub async fn client(&self) -> Result<Cps> {
         display::progress("Connecting to blockchain...");
-        let client = Client::connect(self.url.as_deref()).await?;
+        let client = Cps::connect(self.url.as_deref()).await?;
         match &self.url {
             Some(url) => display::info(&format!("Connected to {url}")),
             None => display::info("Connected through the embedded light client"),

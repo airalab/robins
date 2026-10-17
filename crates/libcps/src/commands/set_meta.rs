@@ -22,7 +22,7 @@ use crate::display;
 use anyhow::Result;
 use colored::*;
 use libcps::crypto::{EncryptionAlgorithm, Scheme, Signer};
-use libcps::{prelude::*, NodeId};
+use libcps::NodeId;
 
 /// Replace the metadata of `node_id`, encrypting it with `cipher` for
 /// `receiver_public` when a receiver is given.
@@ -34,7 +34,7 @@ pub async fn execute<S: Scheme>(
     receiver_public: Option<[u8; 32]>,
     algorithm: Option<EncryptionAlgorithm>,
 ) -> Result<()> {
-    let client = connection.client().await?;
+    let cps = connection.client().await?;
     let signer = connection.signer()?;
 
     display::info(&format!("Updating metadata for node {node_id}"));
@@ -44,10 +44,10 @@ pub async fn execute<S: Scheme>(
         None => data.into_bytes(),
     };
 
-    let tx = NodeId::from(node_id).set_meta(bytes)?;
+    let tx = cps.node(NodeId::from(node_id)).set_meta(bytes)?;
 
     let spinner = display::spinner("Submitting transaction...");
-    let receipt = client.submit_finalized(&tx, &signer).await;
+    let receipt = cps.submit_finalized(&tx, &signer).await;
     spinner.finish_and_clear();
     receipt?;
 
