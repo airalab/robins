@@ -44,6 +44,33 @@ pub const PUBLISH_TOTAL: &str = "edge_publish_total";
 /// Currently connected libp2p peers (gauge).
 pub const CONNECTED_PEERS: &str = "edge_connected_peers";
 
+/// Authorized messages persisted and waiting to be batched (gauge).
+pub const BATCHER_PENDING_MESSAGES: &str = "edge_batcher_pending_messages";
+/// Prepared batches persisted and waiting to be anchored (gauge).
+pub const BATCHER_READY_BATCHES: &str = "edge_batcher_ready_batches";
+/// Age of the oldest pending message, in seconds (gauge).
+pub const BATCHER_OLDEST_PENDING_AGE_SECONDS: &str = "edge_batcher_oldest_pending_age_seconds";
+/// Batch flushes, labelled by `reason` (`count`, `size`, `age`, `shutdown`) (counter).
+pub const BATCHER_FLUSH_TOTAL: &str = "edge_batcher_flush_total";
+/// Oversized batches that had to be split in two (counter).
+pub const BATCHER_SPLIT_TOTAL: &str = "edge_batcher_split_total";
+/// Single messages dropped because they can never fit `max_batch_size` (counter).
+pub const BATCHER_PAYLOAD_TOO_LARGE_TOTAL: &str = "edge_batcher_payload_too_large_total";
+/// Serialized (pre-compression) size of emitted batches, in bytes (histogram).
+pub const BATCHER_SERIALIZED_BYTES: &str = "edge_batcher_serialized_bytes";
+/// Final (post-compression) payload size of emitted batches, in bytes (histogram).
+pub const BATCHER_PAYLOAD_BYTES: &str = "edge_batcher_payload_bytes";
+/// Payload size divided by serialized size of the last emitted batch (gauge).
+pub const BATCHER_COMPRESSION_RATIO: &str = "edge_batcher_compression_ratio";
+/// `CPS.set_payload` submissions attempted (counter).
+pub const ANCHOR_SUBMISSION_TOTAL: &str = "edge_anchor_submission_total";
+/// Submissions retried after a transient failure (counter).
+pub const ANCHOR_RETRY_TOTAL: &str = "edge_anchor_retry_total";
+/// Batches confirmed (finalized) on chain and removed locally (counter).
+pub const ANCHOR_CONFIRMATION_TOTAL: &str = "edge_anchor_confirmation_total";
+/// Permanent anchoring failures that stopped the anchor (counter).
+pub const ANCHOR_FAILURE_TOTAL: &str = "edge_anchor_failure_total";
+
 /// Meshtastic packets received on the configured `PortNum` (counter).
 pub const MESHTASTIC_PACKETS_RECEIVED_TOTAL: &str = "edge_meshtastic_packets_received_total";
 /// Meshtastic packets ignored (wrong port, non-application data, not
@@ -153,6 +180,53 @@ fn describe() {
         MESHTASTIC_CONNECTION_UP,
         "Whether the Meshtastic serial session is currently up"
     );
+
+    metrics::describe_gauge!(
+        BATCHER_PENDING_MESSAGES,
+        "Authorized messages persisted and waiting to be batched"
+    );
+    metrics::describe_gauge!(
+        BATCHER_READY_BATCHES,
+        "Prepared batches persisted and waiting to be anchored"
+    );
+    metrics::describe_gauge!(
+        BATCHER_OLDEST_PENDING_AGE_SECONDS,
+        "Age of the oldest pending message in seconds"
+    );
+    metrics::describe_counter!(BATCHER_FLUSH_TOTAL, "Batch flushes, by reason");
+    metrics::describe_counter!(BATCHER_SPLIT_TOTAL, "Oversized batches split in two");
+    metrics::describe_counter!(
+        BATCHER_PAYLOAD_TOO_LARGE_TOTAL,
+        "Single messages dropped because they cannot fit max_batch_size"
+    );
+    metrics::describe_histogram!(
+        BATCHER_SERIALIZED_BYTES,
+        "Serialized (pre-compression) size of emitted batches in bytes"
+    );
+    metrics::describe_histogram!(
+        BATCHER_PAYLOAD_BYTES,
+        "Final (post-compression) payload size of emitted batches in bytes"
+    );
+    metrics::describe_gauge!(
+        BATCHER_COMPRESSION_RATIO,
+        "Payload size divided by serialized size of the last emitted batch"
+    );
+    metrics::describe_counter!(
+        ANCHOR_SUBMISSION_TOTAL,
+        "CPS set_payload submissions attempted"
+    );
+    metrics::describe_counter!(
+        ANCHOR_RETRY_TOTAL,
+        "Anchor submissions retried after a transient failure"
+    );
+    metrics::describe_counter!(
+        ANCHOR_CONFIRMATION_TOTAL,
+        "Batches finalized on chain and removed locally"
+    );
+    metrics::describe_counter!(
+        ANCHOR_FAILURE_TOTAL,
+        "Permanent anchoring failures that stopped the anchor"
+    );
 }
 
 /// Build a non-global Prometheus handle for tests.
@@ -196,6 +270,19 @@ mod tests {
             MESHTASTIC_REASSEMBLY_PENDING,
             MESHTASTIC_RECONNECTS_TOTAL,
             MESHTASTIC_CONNECTION_UP,
+            BATCHER_PENDING_MESSAGES,
+            BATCHER_READY_BATCHES,
+            BATCHER_OLDEST_PENDING_AGE_SECONDS,
+            BATCHER_FLUSH_TOTAL,
+            BATCHER_SPLIT_TOTAL,
+            BATCHER_PAYLOAD_TOO_LARGE_TOTAL,
+            BATCHER_SERIALIZED_BYTES,
+            BATCHER_PAYLOAD_BYTES,
+            BATCHER_COMPRESSION_RATIO,
+            ANCHOR_SUBMISSION_TOTAL,
+            ANCHOR_RETRY_TOTAL,
+            ANCHOR_CONFIRMATION_TOTAL,
+            ANCHOR_FAILURE_TOTAL,
         ] {
             assert!(name.starts_with("edge_"), "{name} missing edge_ prefix");
             assert_eq!(name, name.to_lowercase(), "{name} must be snake_case");

@@ -28,7 +28,8 @@
 //! 3. **Deduplicate** by [`EnvelopeId`] via a bounded TTL [`DedupCache`];
 //!    duplicates increment [`DEDUP_DROPPED_TOTAL`].
 //! 4. **Fan out** the resulting [`AcceptedMessage`] to every configured
-//!    [`MessageSink`] (live GossipSub today; a durable IPFS spool later).
+//!    [`MessageSink`]: live GossipSub and the durable [`BatchSink`] that feeds
+//!    batching and on-chain anchoring.
 //!
 //! Fan-out awaits each sink, so a slow or bounded sink backpressures the whole
 //! pipeline, which in turn backpressures ingress transports (e.g. HTTP `429`).
@@ -36,8 +37,10 @@
 //! others, preserving independent failure domains between the live and durable
 //! paths.
 
+pub mod batch_sink;
 pub mod dedup;
 
+pub use batch_sink::BatchSink;
 pub use dedup::DedupCache;
 
 use crate::auth::AuthPolicy;

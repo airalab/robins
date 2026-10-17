@@ -210,10 +210,65 @@ requirement in the Transport v1 spec (`src/protobufs/transport/meshtastic/v1.md`
 The adapter owns its own connect/reconnect loop, so a missing or disconnected
 radio never blocks daemon startup or the HTTP ingress path.
 
+### Durable batching and CPS anchoring
+
+With `[blockchain] enabled = true` the gateway also anchors accepted telemetry
+on the Robonomics CPS pallet through a crash-safe, local pipeline:
+
+```text
+accepted envelope ─▶ redb pending_messages ─▶ Batcher ─▶ redb ready_batches ─▶ Anchor ─▶ CPS.set_payload
+```
+
+- **`RedbBatchStore`** (embedded [redb](https://www.redb.org), no external
+  service) persists every accepted envelope *before* batching depends on
+  memory, and every prepared batch before it is submitted. The
+  pending → ready transition is one atomic transaction.
+- **`Batcher`** owns the payload: it flushes when the oldest message reaches
+  `max_batch_age_secs` (measured from its persisted receive time, so it still
+  applies after a restart), when `max_messages` is reached, or — without
+  compression — when the next envelope would exceed `max_batch_size`. It builds
+  a `SignedEnvelopeBatch`, serializes it, applies `compression` (`none` or
+  `zstd`), checks the **final** size against `max_batch_size` and splits
+  oversized batches recursively. A single message that can never fit is logged,
+  counted (`edge_batcher_payload_too_large_total`) and dropped.
+- **`Anchor`** owns only the transaction lifecycle: it reconciles the CPS node
+  metadata at startup, submits the exact stored bytes with `set_payload`,
+  retries transient failures with the same bytes, waits for finalization and
+  then removes the batch. It never serializes, compresses or splits.
+
+The payload is exactly the (compressed) protobuf batch — no magic bytes or
+framing. How to read it is published in the CPS node metadata, e.g.
+`{"schema":"SignedEnvelopeBatch","schema_version":1,"encoding":"protobuf","compression":"zstd"}`;
+decode a payload with `edge batch -d` (zstd) or `edge batch`.
+
+Delivery is **at-least-once**: if the daemon stops after a batch finalized but
+before local cleanup, that batch is submitted again after restart. The CPS
+payload is overwritten by each `set_payload`, so history lives in the finalized
+blocks. Changing `[batcher].compression` while prepared batches are still
+waiting to be anchored is refused at startup; once they are drained the new
+format is recorded and the CPS metadata updated. An unreachable chain never
+blocks ingestion: messages and batches accumulate on disk until it returns. A
+permanent anchoring error (e.g. the account lost write access) stops the
+anchor, leaves the batch stored, and is logged and counted in
+`edge_anchor_failure_total`.
+
+| Section        | Key                    | Default       | Description                                                      |
+| -------------- | ---------------------- | ------------- | ---------------------------------------------------------------- |
+| `[batcher]`    | `max_batch_age_secs`   | `30`          | Max wait of the oldest message before its batch is flushed.      |
+|                | `max_batch_size`       | `8192`        | Max final payload bytes (≤ the CPS limit of `8192`).             |
+|                | `max_messages`         | `100`         | Max envelopes per batch.                                         |
+|                | `compression`          | `"zstd"`      | `"zstd"` or `"none"`.                                            |
+| `[blockchain]` | `enabled`              | `false`       | Enable durable batching and CPS anchoring.                       |
+|                | `endpoint`             | —             | Robonomics RPC endpoint (`ws://` / `wss://`); required.          |
+|                | `key_file`             | —             | File with the anchoring account secret URI; required.            |
+|                | `node_id`              | —             | CPS node receiving batches (account needs write access); required. |
+|                | `retry_min_secs`       | `1`           | First retry delay after a transient chain failure.               |
+|                | `retry_max_secs`       | `60`          | Upper bound of the exponential retry back-off.                   |
+| `[storage]`    | `path`                 | —             | redb file holding pending messages and ready batches; required.  |
+
 ### Deferred sections
 
-`[ipfs]`, `[blockchain]` and `[storage]` are parsed for forward
-compatibility but have no effect in this build.
+`[ipfs]` is parsed for forward compatibility but has no effect in this build.
 
 ## Testing
 
@@ -223,4 +278,8 @@ nix develop --command cargo nextest run -p edge
 
 `tests/e2e.rs` exercises the full HTTP → GossipSub path against a standalone
 verifier node and asserts that a persisted identity yields a stable peer id
-across a restart.
+across a restart. `tests/durable_anchoring.rs` covers the durable
+batching pipeline end to end — restarts between persistence, batching and
+anchoring, exact-byte resubmission, original-receive-time ageing and the
+format-change guard — against a recording CPS target, plus the fully wired
+daemon with the chain unreachable.
