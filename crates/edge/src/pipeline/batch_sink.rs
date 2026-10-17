@@ -50,6 +50,12 @@ impl MessageSink for BatchSink {
         "batch"
     }
 
+    /// Losing an authorized envelope is unacceptable, so the pipeline retries
+    /// failed writes instead of discarding the message.
+    fn required(&self) -> bool {
+        true
+    }
+
     async fn deliver(&self, message: Arc<AcceptedMessage>) -> Result<(), SinkError> {
         self.store
             .push_message(

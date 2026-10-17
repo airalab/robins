@@ -74,8 +74,10 @@ pub trait BatchStore: Send + Sync {
         prepared: &[PreparedBatch],
     ) -> StoreResult<Vec<BatchId>>;
 
-    /// All ready batches, oldest first.
-    async fn ready_batches(&self) -> StoreResult<Vec<StoredBatch>>;
+    /// Up to `limit` of the oldest ready batches, oldest first.
+    ///
+    /// Bounded so draining a long backlog never loads it into memory at once.
+    async fn ready_batches(&self, limit: usize) -> StoreResult<Vec<StoredBatch>>;
 
     /// Durably remove a batch whose anchoring was confirmed.
     async fn confirm_batch(&self, id: BatchId) -> StoreResult<()>;

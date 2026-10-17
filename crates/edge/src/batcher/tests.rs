@@ -96,7 +96,7 @@ async fn flushes_when_max_messages_reached() {
 
     let next = batcher.flush_due(now).await.unwrap();
     assert_eq!(next, None);
-    let ready = store.ready_batches().await.unwrap();
+    let ready = store.ready_batches(usize::MAX).await.unwrap();
     assert_eq!(ready.len(), 1);
     assert_eq!(ready[0].message_count, 3);
     assert_eq!(store.counts().await.unwrap().pending_messages, 0);
@@ -112,12 +112,12 @@ async fn waits_until_age_deadline_from_original_receive_time() {
 
     let next = batcher.flush_due(now).await.unwrap();
     assert_eq!(next, Some(Duration::from_secs(20)));
-    assert!(store.ready_batches().await.unwrap().is_empty());
+    assert!(store.ready_batches(usize::MAX).await.unwrap().is_empty());
 
     // Once the deadline passes the open batch is flushed.
     let later = Timestamp::from_millis(1_020_000);
     assert_eq!(batcher.flush_due(later).await.unwrap(), None);
-    assert_eq!(store.ready_batches().await.unwrap().len(), 1);
+    assert_eq!(store.ready_batches(usize::MAX).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -128,7 +128,7 @@ async fn restored_message_past_deadline_flushes_immediately() {
     push(&store, &envelope(20), received).await;
 
     assert_eq!(batcher.flush_due(Timestamp::now()).await.unwrap(), None);
-    assert_eq!(store.ready_batches().await.unwrap().len(), 1);
+    assert_eq!(store.ready_batches(usize::MAX).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -144,7 +144,7 @@ async fn payload_is_exactly_the_serialized_batch_without_framing() {
         .flush_all()
         .await
         .unwrap();
-    let ready = store.ready_batches().await.unwrap();
+    let ready = store.ready_batches(usize::MAX).await.unwrap();
     let expected = protocol::encode_envelope_batch(&SignedEnvelopeBatch {
         batch: envelopes.to_vec(),
     });
@@ -164,7 +164,7 @@ async fn zstd_payload_decompresses_to_the_batch() {
         .flush_all()
         .await
         .unwrap();
-    let ready = store.ready_batches().await.unwrap();
+    let ready = store.ready_batches(usize::MAX).await.unwrap();
     assert_eq!(unpack(Compression::Zstd, &ready[0].payload), envelopes);
 }
 
@@ -186,7 +186,7 @@ async fn size_check_uses_final_payload_and_accepts_exact_fit() {
     );
     push(&store, &single, Timestamp::now()).await;
     batcher.flush_all().await.unwrap();
-    let ready = store.ready_batches().await.unwrap();
+    let ready = store.ready_batches(usize::MAX).await.unwrap();
     assert_eq!(ready.len(), 1);
     assert_eq!(ready[0].payload.len(), exact);
 }
@@ -272,7 +272,7 @@ async fn soft_size_flush_without_compression_never_needs_a_split() {
     // Two ~380 B envelopes fit in 1000 B; the third does not and stays open.
     let next = batcher.flush_due(now).await.unwrap();
     assert!(next.is_some());
-    let ready = store.ready_batches().await.unwrap();
+    let ready = store.ready_batches(usize::MAX).await.unwrap();
     assert_eq!(ready.len(), 1);
     assert_eq!(ready[0].message_count, 2);
     assert!(ready[0].payload.len() <= 1000);
@@ -296,11 +296,11 @@ async fn ready_payload_is_unchanged_by_later_batching() {
     let batcher = batcher(&store, config(Compression::Zstd));
     push(&store, &envelope(40), Timestamp::now()).await;
     batcher.flush_all().await.unwrap();
-    let first = store.ready_batches().await.unwrap();
+    let first = store.ready_batches(usize::MAX).await.unwrap();
 
     push(&store, &envelope(40), Timestamp::now()).await;
     batcher.flush_all().await.unwrap();
-    let all = store.ready_batches().await.unwrap();
+    let all = store.ready_batches(usize::MAX).await.unwrap();
     assert_eq!(all.len(), 2);
     assert_eq!(all[0], first[0]);
 }

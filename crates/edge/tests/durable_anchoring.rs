@@ -188,7 +188,7 @@ async fn envelope_travels_from_pending_through_batch_to_exact_payload_on_chain()
             Arc::new(Notify::new()),
         );
         batcher.flush_all().await.unwrap();
-        let ready = store.ready_batches().await.unwrap();
+        let ready = store.ready_batches(usize::MAX).await.unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(store.counts().await.unwrap().pending_messages, 0);
         ready[0].payload.clone()
@@ -197,7 +197,7 @@ async fn envelope_travels_from_pending_through_batch_to_exact_payload_on_chain()
 
     // 3. Restart: the anchor submits exactly the persisted bytes.
     let store = open(&path);
-    let before = store.ready_batches().await.unwrap();
+    let before = store.ready_batches(usize::MAX).await.unwrap();
     assert_eq!(
         before[0].payload, prepared_payload,
         "not rebuilt on restart"
@@ -239,7 +239,7 @@ async fn crash_after_finalization_resubmits_the_same_bytes() {
 
         // The chain accepted the batch, but the process died before cleanup:
         // simulated by submitting directly and never calling `confirm_batch`.
-        let batch = store.ready_batches().await.unwrap().remove(0);
+        let batch = store.ready_batches(usize::MAX).await.unwrap().remove(0);
         target.set_payload(&batch.payload).await.unwrap();
     }
 
@@ -393,7 +393,7 @@ async fn gateway_keeps_ingesting_with_chain_down_and_recovers_after_restart() {
     let counts = store.counts().await.unwrap();
     assert_eq!(counts.pending_messages, 0);
     assert_eq!(counts.ready_batches, 1);
-    let ready = store.ready_batches().await.unwrap();
+    let ready = store.ready_batches(usize::MAX).await.unwrap();
     assert_eq!(ready[0].message_count, 3);
     let payload = ready[0].payload.clone();
     drop(store);
@@ -404,7 +404,10 @@ async fn gateway_keeps_ingesting_with_chain_down_and_recovers_after_restart() {
         .expect("gateway restarts");
     app.shutdown().await;
     let store = open(config.storage.path.as_ref().unwrap());
-    assert_eq!(store.ready_batches().await.unwrap()[0].payload, payload);
+    assert_eq!(
+        store.ready_batches(usize::MAX).await.unwrap()[0].payload,
+        payload
+    );
     drop(store);
 
     // Changing the payload format while that batch is outstanding is refused.

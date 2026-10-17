@@ -184,8 +184,8 @@ impl BatchStore for RedbBatchStore {
         .await
     }
 
-    async fn ready_batches(&self) -> StoreResult<Vec<StoredBatch>> {
-        self.blocking(|db| {
+    async fn ready_batches(&self, limit: usize) -> StoreResult<Vec<StoredBatch>> {
+        self.blocking(move |db| {
             let txn = db.begin_read().map_err(StoreError::database)?;
             let ready = txn
                 .open_table(READY_BATCHES)
@@ -193,6 +193,7 @@ impl BatchStore for RedbBatchStore {
             ready
                 .iter()
                 .map_err(StoreError::database)?
+                .take(limit)
                 .map(|entry| {
                     let (key, value) = entry.map_err(StoreError::database)?;
                     decode_batch(key.value(), value.value())
@@ -423,11 +424,15 @@ mod tests {
             .unwrap();
         assert_eq!(ids, vec![BatchId(0), BatchId(1)]);
 
-        let ready = store.ready_batches().await.unwrap();
+        let ready = store.ready_batches(usize::MAX).await.unwrap();
         assert_eq!(ready.len(), 2);
         assert_eq!(ready[0].payload, b"first");
         assert_eq!(ready[1].payload, b"second");
         assert_eq!(ready[1].message_count, 1);
+
+        let first_only = store.ready_batches(1).await.unwrap();
+        assert_eq!(first_only.len(), 1);
+        assert_eq!(first_only[0].payload, b"first");
 
         let pending = store.pending_messages(10).await.unwrap();
         assert_eq!(pending.len(), 1);
@@ -480,7 +485,7 @@ mod tests {
         let pending = store.pending_messages(10).await.unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].received_at, Timestamp::from_millis(43));
-        let ready = store.ready_batches().await.unwrap();
+        let ready = store.ready_batches(usize::MAX).await.unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].payload, b"payload");
         assert_eq!(
@@ -509,7 +514,7 @@ mod tests {
             store.confirm_batch(ids[0]).await.unwrap();
         }
         let store = RedbBatchStore::open(&path).unwrap();
-        assert!(store.ready_batches().await.unwrap().is_empty());
+        assert!(store.ready_batches(usize::MAX).await.unwrap().is_empty());
         assert_eq!(store.counts().await.unwrap(), StoreCounts::default());
     }
 

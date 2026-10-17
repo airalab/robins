@@ -253,7 +253,7 @@ async fn permanent_failure_stops_the_anchor_and_keeps_the_batch() {
         1,
         "permanent errors are not retried"
     );
-    let ready = store.ready_batches().await.unwrap();
+    let ready = store.ready_batches(usize::MAX).await.unwrap();
     assert_eq!(ready.len(), 1);
     assert_eq!(ready[0].payload, b"payload");
 }
@@ -269,7 +269,7 @@ async fn oversized_batch_is_rejected_not_repaired() {
     assert!(matches!(result, Err(AnchorError::Permanent(_))));
     assert!(target.payloads().is_empty(), "nothing is submitted");
     assert_eq!(
-        store.ready_batches().await.unwrap()[0].payload,
+        store.ready_batches(usize::MAX).await.unwrap()[0].payload,
         b"0123456789"
     );
 }

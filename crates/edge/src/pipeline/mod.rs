@@ -36,6 +36,13 @@
 //! Sinks are kept decoupled: one sink's failure never aborts delivery to the
 //! others, preserving independent failure domains between the live and durable
 //! paths.
+//!
+//! The exception is a [`required`](MessageSink::required) sink such as the
+//! durable [`BatchSink`]: an authorized envelope must not be lost, so a failed
+//! delivery is retried with back-off (stalling the pipeline and thereby
+//! applying backpressure to ingress) until it succeeds or shutdown begins.
+//! Only then is the message dropped, and its dedup entry is forgotten so a
+//! retransmission is not suppressed.
 
 pub mod batch_sink;
 pub mod dedup;
@@ -53,8 +60,14 @@ use crate::shutdown::ShutdownSignal;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
+
+/// First back-off delay after a required sink failed to accept a message.
+const REQUIRED_RETRY_INITIAL: Duration = Duration::from_millis(100);
+
+/// Upper bound of the back-off delay for required sinks.
+const REQUIRED_RETRY_MAX: Duration = Duration::from_secs(5);
 
 /// A fully validated, authorized and deduplicated message ready for delivery.
 ///
@@ -103,6 +116,14 @@ pub enum SinkError {
 pub trait MessageSink: Send + Sync {
     /// A stable, human-readable sink name for logs and diagnostics.
     fn name(&self) -> &'static str;
+
+    /// Whether losing a message on this sink is unacceptable.
+    ///
+    /// A failed delivery to a required sink is retried with back-off instead
+    /// of being logged and discarded.
+    fn required(&self) -> bool {
+        false
+    }
 
     /// Deliver `message` downstream, awaiting to apply backpressure.
     async fn deliver(&self, message: Arc<AcceptedMessage>) -> Result<(), SinkError>;
@@ -154,6 +175,8 @@ pub struct Pipeline {
     dedup: DedupCache,
     /// Fan-out targets for accepted messages.
     sinks: Vec<Box<dyn MessageSink>>,
+    /// Back-off `(initial, max)` applied when a required sink fails.
+    required_retry: (Duration, Duration),
 }
 
 impl Pipeline {
@@ -163,7 +186,19 @@ impl Pipeline {
         dedup: DedupCache,
         sinks: Vec<Box<dyn MessageSink>>,
     ) -> Self {
-        Self { auth, dedup, sinks }
+        Self {
+            auth,
+            dedup,
+            sinks,
+            required_retry: (REQUIRED_RETRY_INITIAL, REQUIRED_RETRY_MAX),
+        }
+    }
+
+    /// Override the back-off used when retrying required sinks.
+    #[cfg(test)]
+    fn with_required_retry(mut self, initial: Duration, max: Duration) -> Self {
+        self.required_retry = (initial, max);
+        self
     }
 
     /// Drain `rx` and process messages until the channel closes or `shutdown`
@@ -178,7 +213,7 @@ impl Pipeline {
                 }
                 maybe = rx.recv() => {
                     match maybe {
-                        Some(message) => self.process(message).await,
+                        Some(message) => self.process(message, &mut shutdown).await,
                         None => {
                             tracing::info!("ingress channel closed; pipeline stopping");
                             break;
@@ -190,7 +225,7 @@ impl Pipeline {
     }
 
     /// Apply the canonical verify → authorize → deduplicate → fan-out sequence.
-    async fn process(&mut self, message: IngressMessage) {
+    async fn process(&mut self, message: IngressMessage, shutdown: &mut ShutdownSignal) {
         let transport = message.transport.transport.as_str();
 
         let verified = match verify_envelope(&message.envelope) {
@@ -231,16 +266,54 @@ impl Pipeline {
             "accepted envelope; publishing"
         );
 
-        self.fan_out(accepted).await;
+        if !self.fan_out(&accepted, shutdown).await {
+            // The message never reached a required sink, so it must stay
+            // eligible when the sender retransmits it.
+            self.dedup.forget(&id);
+        }
     }
 
     /// Deliver an accepted message to every sink, isolating per-sink failures.
-    async fn fan_out(&self, message: Arc<AcceptedMessage>) {
+    ///
+    /// Failures of optional sinks are logged and skipped. A required sink is
+    /// retried with back-off until it accepts the message. Returns `false` if
+    /// shutdown interrupted delivery to a required sink.
+    async fn fan_out(&self, message: &Arc<AcceptedMessage>, shutdown: &mut ShutdownSignal) -> bool {
+        let mut complete = true;
         for sink in &self.sinks {
-            if let Err(err) = sink.deliver(Arc::clone(&message)).await {
-                tracing::warn!(sink = sink.name(), %err, "sink delivery failed");
+            let mut delay = self.required_retry.0;
+            loop {
+                let err = match sink.deliver(Arc::clone(message)).await {
+                    Ok(()) => break,
+                    Err(err) => err,
+                };
+                if !sink.required() {
+                    tracing::warn!(sink = sink.name(), %err, "sink delivery failed");
+                    break;
+                }
+                tracing::error!(
+                    sink = sink.name(),
+                    %err,
+                    envelope_id = %message.envelope_id,
+                    ?delay,
+                    "required sink failed; retrying"
+                );
+                tokio::select! {
+                    _ = shutdown.recv() => {
+                        tracing::error!(
+                            sink = sink.name(),
+                            envelope_id = %message.envelope_id,
+                            "shutdown before required sink accepted the message; dropped"
+                        );
+                        complete = false;
+                        break;
+                    }
+                    _ = tokio::time::sleep(delay) => {}
+                }
+                delay = (delay * 2).min(self.required_retry.1);
             }
         }
+        complete
     }
 }
 
@@ -251,7 +324,7 @@ mod tests {
     use crate::ingress::{channel, Transport};
     use crate::protocol::{encode_envelope, sign_message, SensorIdentity, SignOptions};
     use crate::shutdown::ShutdownController;
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn ingress_message(identity: &SensorIdentity, payload: &[u8]) -> IngressMessage {
         let envelope = sign_message(identity, payload, SignOptions::default());
@@ -399,5 +472,91 @@ mod tests {
 
         let delivered = run_pipeline(Box::new(NoneAuth), vec![http, mesh]).await;
         assert_eq!(delivered.len(), 1);
+    }
+
+    /// A sink that fails a fixed number of times before accepting messages.
+    struct FlakySink {
+        required: bool,
+        failures_left: AtomicUsize,
+        delivered: AtomicUsize,
+    }
+
+    impl FlakySink {
+        fn new(required: bool, failures: usize) -> Arc<Self> {
+            Arc::new(Self {
+                required,
+                failures_left: AtomicUsize::new(failures),
+                delivered: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl MessageSink for Arc<FlakySink> {
+        fn name(&self) -> &'static str {
+            "flaky"
+        }
+
+        fn required(&self) -> bool {
+            self.required
+        }
+
+        async fn deliver(&self, _message: Arc<AcceptedMessage>) -> Result<(), SinkError> {
+            let failing = self
+                .failures_left
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok();
+            if failing {
+                return Err(SinkError::Closed("flaky"));
+            }
+            self.delivered.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    async fn run_with_sink(sink: Arc<FlakySink>, messages: Vec<IngressMessage>) {
+        let pipeline = Pipeline::new(Box::new(NoneAuth), dedup(), vec![Box::new(sink)])
+            .with_required_retry(Duration::from_millis(1), Duration::from_millis(4));
+        let (tx, ingress_rx) = channel(64);
+        let controller = ShutdownController::new();
+        let handle = tokio::spawn(pipeline.run(ingress_rx, controller.subscribe()));
+        for message in messages {
+            tx.send(message).await.unwrap();
+        }
+        drop(tx);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn required_sink_is_retried_until_it_accepts() {
+        let identity = SensorIdentity::from_secret_bytes(&[9u8; 32]);
+        let sink = FlakySink::new(true, 3);
+        run_with_sink(sink.clone(), vec![ingress_message(&identity, b"keep")]).await;
+        assert_eq!(sink.delivered.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.failures_left.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn optional_sink_failure_is_not_retried() {
+        let identity = SensorIdentity::from_secret_bytes(&[10u8; 32]);
+        let sink = FlakySink::new(false, 1);
+        run_with_sink(sink.clone(), vec![ingress_message(&identity, b"drop")]).await;
+        assert_eq!(sink.delivered.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn shutdown_during_required_retry_forgets_dedup_entry() {
+        let identity = SensorIdentity::from_secret_bytes(&[11u8; 32]);
+        let sink = FlakySink::new(true, usize::MAX);
+        let mut pipeline = Pipeline::new(Box::new(NoneAuth), dedup(), vec![Box::new(sink)])
+            .with_required_retry(Duration::from_millis(1), Duration::from_millis(4));
+        let controller = ShutdownController::new();
+        let mut shutdown = controller.subscribe();
+        controller.trigger();
+
+        let message = ingress_message(&identity, b"lost");
+        let id = envelope_id(&message.raw_envelope);
+        pipeline.process(message, &mut shutdown).await;
+        assert!(pipeline.dedup.insert_if_new(id));
     }
 }

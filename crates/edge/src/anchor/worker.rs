@@ -35,6 +35,11 @@ const SHUTDOWN_DRAIN: Duration = Duration::from_secs(10);
 /// Safety-net poll interval for ready batches if a wake-up is ever missed.
 const IDLE_POLL: Duration = Duration::from_secs(30);
 
+/// Most ready batches held in memory at once. Anchoring is serial and each
+/// confirmed batch leaves the store, so the next page is simply the next
+/// oldest batches; recovery memory stays bounded regardless of backlog size.
+const READY_PAGE: usize = 4;
+
 /// Outcome of a retried operation.
 enum Retried<T> {
     /// The operation succeeded.
@@ -78,7 +83,7 @@ impl Anchor {
         loop {
             let batches = match self
                 .retry_transient("loading ready batches", &mut shutdown, || async {
-                    Ok(self.store.ready_batches().await?)
+                    Ok(self.store.ready_batches(READY_PAGE).await?)
                 })
                 .await?
             {
