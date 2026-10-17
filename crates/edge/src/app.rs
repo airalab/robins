@@ -301,7 +301,7 @@ async fn spawn_anchoring(
             min: Duration::from_secs(blockchain.retry_min_secs),
             max: Duration::from_secs(blockchain.retry_max_secs),
         },
-        max_payload: config.batcher.max_batch_size,
+        max_payload: libcps::MAX_PAYLOAD_SIZE,
     };
     let anchor_shutdown = controller.subscribe();
     tasks.push(tokio::spawn(anchor::run_chain_anchor(
