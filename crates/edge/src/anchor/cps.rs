@@ -118,8 +118,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dispatch_failures_are_permanent_and_submission_failures_transient() {
-        assert!(!classify(CpsError::Dispatch("Module error".into())).is_transient());
+    fn authorization_failures_are_permanent_and_submission_failures_transient() {
+        assert!(!classify(CpsError::AccessDenied).is_transient());
         assert!(classify(CpsError::Transaction("connection dropped".into())).is_transient());
     }
 }
