@@ -21,7 +21,7 @@ use super::Connection;
 use crate::display;
 use anyhow::Result;
 use libcps::crypto::{Cipher, EncryptedMessage, Scheme, Signer};
-use libcps::{prelude::*, Client, NodeId};
+use libcps::{CpsAt, NodeId};
 use parity_scale_codec::Decode;
 use std::future::Future;
 use std::pin::Pin;
@@ -33,11 +33,13 @@ pub async fn execute<S: Scheme>(
     cipher: Option<&Signer<S>>,
     node_id: u64,
 ) -> Result<()> {
-    let client = connection.client().await?;
+    let cps = connection.client().await?;
 
     display::progress(&format!("Fetching node tree from node {node_id}..."));
 
-    print_node_tree(&client, NodeId::from(node_id), cipher, "", true).await?;
+    // One pinned block keeps the whole tree consistent.
+    let at = cps.finalized().await?;
+    print_node_tree(&at, NodeId::from(node_id), cipher, "", true).await?;
 
     Ok(())
 }
@@ -64,29 +66,30 @@ fn data_to_string<S: Scheme>(data: Vec<u8>, cipher: Option<&Signer<S>>) -> Resul
 }
 
 fn print_node_tree<'a, S: Scheme>(
-    client: &'a Client,
+    at: &'a CpsAt,
     node: NodeId,
     cipher: Option<&'a Signer<S>>,
     prefix: &'a str,
     is_last: bool,
 ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
     Box::pin(async move {
-        if node.info(client).await?.is_none() {
+        let handle = at.node(node);
+        if handle.info().await?.is_none() {
             return Err(libcps::Error::NodeNotFound(node).into());
         }
 
-        let owner = node.resolve_scope(client).await?.owner;
-        let meta = node
-            .meta(client)
+        let owner = handle.resolve_scope().await?.owner;
+        let meta = handle
+            .meta()
             .await?
             .map(|meta| data_to_string(meta, cipher))
             .transpose()?;
-        let payload = node
-            .payload(client)
+        let payload = handle
+            .payload()
             .await?
             .map(|payload| data_to_string(payload, cipher))
             .transpose()?;
-        let children = node.children(client).await?;
+        let children = handle.children().await?;
 
         display::tree::print_node_recursive(
             node.0,
@@ -106,7 +109,7 @@ fn print_node_tree<'a, S: Scheme>(
 
             for (i, child) in children.iter().enumerate() {
                 let is_last_child = i == children.len() - 1;
-                print_node_tree(client, *child, cipher, &child_prefix, is_last_child).await?;
+                print_node_tree(at, *child, cipher, &child_prefix, is_last_child).await?;
             }
         }
 

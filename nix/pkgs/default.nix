@@ -1,11 +1,9 @@
 { pkgs, self }:
 
-let
-  # Common parameters
-  revHash = if (self ? rev) then self.rev else self.dirtyRev;
-in rec {
-  default = robonomics;
+rec {
+  default = edge;
 
-  robonomics = pkgs.callPackage ./robonomics { inherit revHash; };
+  edge = pkgs.callPackage ./edge {};
   libcps = pkgs.callPackage ./libcps {};
+  mqtt-bridge = pkgs.callPackage ./mqtt-bridge {};
 }

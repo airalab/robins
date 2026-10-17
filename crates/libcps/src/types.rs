@@ -15,13 +15,13 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Plain value types of the CPS 1.0 data model.
+//! Plain value types of the CPS 1.1 data model.
 //!
 //! Identifiers are lightweight `Copy` values: they hold no client, signer or
-//! cached chain state. Operations on them live in extension traits, see
-//! [`crate::prelude`].
+//! cached chain state. Operations are provided by the handles of [`Cps`](crate::Cps),
+//! see [`Node`](crate::Node) and [`Address`](crate::Address).
 
-use crate::api::runtime_types::pallet_robonomics_cps as rt;
+use crate::api::runtime_types::{pallet_robonomics_cps as rt, sp_runtime::MultiSignature};
 use std::fmt;
 
 /// Account identifier (32-byte public key, SS58 `Display`/`FromStr`).
@@ -83,10 +83,8 @@ macro_rules! id_type {
 id_type!(
     /// Identifier of a CPS node, the central resource identifier of CPS 1.0.
     ///
-    /// Node operations are provided by the extension traits
-    /// [`NodeRead`](crate::NodeRead), [`NodeTree`](crate::NodeTree),
-    /// [`NodeWrite`](crate::NodeWrite), [`NodeScope`](crate::NodeScope) and
-    /// [`NodeAccess`](crate::NodeAccess).
+    /// `NodeId` is the canonical structural identifier of a node; operations are
+    /// provided by [`Node`](crate::Node) and [`NodeAt`](crate::NodeAt).
     NodeId,
     NodeId
 );
@@ -94,13 +92,13 @@ id_type!(
 id_type!(
     /// Identifier of a CPS scope (ownership and access boundary).
     ///
-    /// Read operations are provided by [`ScopeRead`](crate::ScopeRead).
+    /// Read operations are provided by [`Scope`](crate::Scope).
     ScopeId,
     ScopeId
 );
 
 /// Operation that can be granted to an account within a scope (see
-/// [`NodeAccess`](crate::NodeAccess)).
+/// [`Node::grant`](crate::Node::grant)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Capability {
     /// Create a nested scope at a node.
@@ -137,15 +135,17 @@ impl From<GrantMode> for rt::GrantMode {
 }
 
 /// A capability together with its reach, the unit of a grant.
+///
+/// Named `Grant` to stay distinct from the pallet `Access` storage entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Access {
+pub struct Grant {
     /// Granted capability.
     pub capability: Capability,
     /// Reach of the grant.
     pub mode: GrantMode,
 }
 
-impl Access {
+impl Grant {
     /// Grant `capability` with the given `mode`.
     pub fn new(capability: Capability, mode: GrantMode) -> Self {
         Self { capability, mode }
@@ -214,12 +214,138 @@ pub struct ResolvedScope {
     pub path: Vec<NodeId>,
 }
 
+/// Signature of an identity [`IdentityPermit`], by the scheme of the identity account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermitSignature {
+    /// ED25519 signature.
+    Ed25519([u8; 64]),
+    /// SR25519 signature.
+    Sr25519([u8; 64]),
+    /// ECDSA signature.
+    Ecdsa([u8; 65]),
+}
+
+impl From<PermitSignature> for MultiSignature {
+    fn from(signature: PermitSignature) -> Self {
+        match signature {
+            PermitSignature::Ed25519(s) => MultiSignature::Ed25519(s),
+            PermitSignature::Sr25519(s) => MultiSignature::Sr25519(s),
+            PermitSignature::Ecdsa(s) => MultiSignature::Ecdsa(s),
+        }
+    }
+}
+
+/// Consent of an identity account to be used as the identity of a node in a scope.
+///
+/// The signature is made by the identity account over the permit payload defined
+/// by the runtime; `libcps` does not construct it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdentityPermit {
+    /// Last block number at which the permit may be used.
+    pub valid_until: u32,
+    /// Signature of the identity account.
+    pub signature: PermitSignature,
+}
+
+/// Account to bind as the identity of a node.
+///
+/// No `permit` is needed when `account` is the transaction signer. Otherwise
+/// a permit of `account` is required (and only possible for a child node).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdentityAssignment {
+    /// Account to use as the identity of the node.
+    pub account: AccountId,
+    /// Permit of `account`, required when it is not the signer.
+    pub permit: Option<IdentityPermit>,
+}
+
+impl IdentityAssignment {
+    /// Assign `account` without a permit (the signer's own account).
+    pub fn new(account: AccountId) -> Self {
+        Self {
+            account,
+            permit: None,
+        }
+    }
+
+    /// Assign `account` with the `permit` it issued.
+    pub fn with_permit(account: AccountId, permit: IdentityPermit) -> Self {
+        Self {
+            account,
+            permit: Some(permit),
+        }
+    }
+
+    pub(crate) fn rt(&self) -> rt::NodeIdentityAssignment<AccountId, u32, MultiSignature> {
+        rt::NodeIdentityAssignment {
+            identity: self.account,
+            permit: self.permit.map(|p| p.rt()),
+        }
+    }
+}
+
+impl IdentityPermit {
+    pub(crate) fn rt(self) -> rt::NodeIdentityPermit<u32, MultiSignature> {
+        rt::NodeIdentityPermit {
+            valid_until: self.valid_until,
+            signature: self.signature.into(),
+        }
+    }
+}
+
 /// Parameters of a node creation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CreateNode {
     /// Initial metadata.
     pub meta: Option<Meta>,
     /// Initial payload.
+    pub payload: Option<Payload>,
+    /// Identity to bind to the new node.
+    pub identity: Option<IdentityAssignment>,
+}
+
+impl CreateNode {
+    /// Empty node: no metadata, payload or identity.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the initial metadata.
+    pub fn meta(mut self, meta: impl Into<Meta>) -> Self {
+        self.meta = Some(meta.into());
+        self
+    }
+
+    /// Set the initial payload.
+    pub fn payload(mut self, payload: impl Into<Payload>) -> Self {
+        self.payload = Some(payload.into());
+        self
+    }
+
+    /// Bind an identity to the new node.
+    pub fn identity(mut self, identity: IdentityAssignment) -> Self {
+        self.identity = Some(identity);
+        self
+    }
+}
+
+/// Complete state of an existing node, read at a single block.
+///
+/// Distinguishes a missing node (no snapshot at all) from an existing node whose
+/// `meta` or `payload` is unset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeSnapshot {
+    /// Node identifier.
+    pub id: NodeId,
+    /// Parent node, `None` for a root node.
+    pub parent: Option<NodeId>,
+    /// Scope rooted at this node, if it is a scope root.
+    pub scope: Option<ScopeId>,
+    /// Identity account bound to the node.
+    pub identity: Option<AccountId>,
+    /// Metadata, if set.
+    pub meta: Option<Meta>,
+    /// Payload, if set.
     pub payload: Option<Payload>,
 }
 

@@ -73,6 +73,16 @@ impl DedupCache {
         self.seen.is_empty()
     }
 
+    /// Drop `id` so a later sighting is treated as new again.
+    ///
+    /// Used when an accepted message could not be handed off, so its
+    /// retransmission is not suppressed as a duplicate.
+    pub fn forget(&mut self, id: &EnvelopeId) {
+        if self.seen.remove(id) {
+            self.order.retain(|(entry, _)| entry != id);
+        }
+    }
+
     /// Record `id`, returning `true` if it is new (should be processed) or
     /// `false` if it duplicates a still-live entry.
     pub fn insert_if_new(&mut self, id: EnvelopeId) -> bool {
@@ -154,6 +164,19 @@ mod tests {
         assert!(!cache.insert_if_new_at(id(1), t0 + Duration::from_secs(5)));
         // Past the window: treated as new again.
         assert!(cache.insert_if_new_at(id(1), t0 + Duration::from_secs(11)));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn forgotten_id_is_new_again() {
+        let mut cache = DedupCache::new(16, Duration::from_secs(60));
+        let now = Instant::now();
+        assert!(cache.insert_if_new_at(id(1), now));
+        cache.forget(&id(1));
+        assert!(cache.is_empty());
+        assert!(cache.insert_if_new_at(id(1), now));
+        // Forgetting an unknown id is a no-op.
+        cache.forget(&id(9));
         assert_eq!(cache.len(), 1);
     }
 

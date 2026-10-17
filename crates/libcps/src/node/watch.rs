@@ -19,7 +19,7 @@
 
 use crate::{
     api,
-    client::Client,
+    cps::Cps,
     error::{Error, Result},
     types::{Hash, Meta, NodeId, Payload},
 };
@@ -47,9 +47,9 @@ struct BlockWatcher {
 }
 
 impl BlockWatcher {
-    async fn new(client: &Client, node: NodeId, field: Field) -> Result<Self> {
-        let blocks = client
-            .api()
+    async fn new(cps: &Cps, node: NodeId, field: Field) -> Result<Self> {
+        let blocks = cps
+            .client()
             .stream_blocks()
             .await
             .map_err(|e| Error::Rpc(Box::new(e)))?;
@@ -138,10 +138,8 @@ pub struct PayloadUpdate {
 pub struct PayloadWatcher(BlockWatcher);
 
 impl PayloadWatcher {
-    pub(crate) async fn new(client: &Client, node: NodeId) -> Result<Self> {
-        BlockWatcher::new(client, node, Field::Payload)
-            .await
-            .map(Self)
+    pub(crate) async fn new(cps: &Cps, node: NodeId) -> Result<Self> {
+        BlockWatcher::new(cps, node, Field::Payload).await.map(Self)
     }
 
     /// Wait for the next finalized block that sets (or clears) the node payload.
@@ -177,8 +175,8 @@ pub struct MetaUpdate {
 pub struct MetaWatcher(BlockWatcher);
 
 impl MetaWatcher {
-    pub(crate) async fn new(client: &Client, node: NodeId) -> Result<Self> {
-        BlockWatcher::new(client, node, Field::Meta).await.map(Self)
+    pub(crate) async fn new(cps: &Cps, node: NodeId) -> Result<Self> {
+        BlockWatcher::new(cps, node, Field::Meta).await.map(Self)
     }
 
     /// Wait for the next finalized block that sets (or clears) the node metadata.

@@ -37,6 +37,9 @@
 //! - [`ingress`]: ingress transports (HTTP) producing the canonical message.
 //! - [`auth`]: authorization policies (none/whitelist) over verified sensors.
 //! - [`pipeline`]: verify → authorize → deduplicate → fan-out acceptance pipeline.
+//! - [`batch_store`]: durable (redb) pending messages and ready batches.
+//! - [`batcher`]: turns pending messages into immutable, size-bounded payloads.
+//! - [`anchor`]: submits ready batches to a CPS node (`set_payload`), at-least-once.
 //! - [`p2p`]: embedded libp2p node and GossipSub publisher.
 //! - [`observability`]: structured logging, metrics and health/readiness probes.
 //! - [`shutdown`]: coordinated graceful-shutdown primitive.
@@ -47,8 +50,11 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod anchor;
 pub mod app;
 pub mod auth;
+pub mod batch_store;
+pub mod batcher;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;

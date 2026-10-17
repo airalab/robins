@@ -150,7 +150,7 @@ use anyhow::{anyhow, Result};
 use libcps::crypto::{
     Cipher, EncryptedMessage, EncryptionAlgorithm, PublicKey, Scheme, Signer, Sr25519,
 };
-use libcps::{prelude::*, AccountId, Capability, Client, NodeId};
+use libcps::{AccountId, Capability, Cps, NodeId};
 use parity_scale_codec::Decode;
 use parity_scale_codec::Encode;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
@@ -215,8 +215,8 @@ impl BlockchainConfig {
 
     /// Connect to the chain over RPC, or through the light client when no
     /// `ws_url` is configured.
-    async fn connect(&self) -> libcps::Result<Client> {
-        Client::connect(self.ws_url.as_deref()).await
+    async fn connect(&self) -> libcps::Result<Cps> {
+        Cps::connect(self.ws_url.as_deref()).await
     }
 }
 
@@ -545,13 +545,13 @@ impl Config {
             "Connecting to blockchain at {}",
             blockchain_config.endpoint()
         );
-        let client = blockchain_config.connect().await?;
+        let cps = blockchain_config.connect().await?;
         let signer = signer(blockchain_config)?;
         debug!("Connected to blockchain successfully");
 
         // Fail fast instead of finalizing a rejected transaction for every message
         let node = NodeId::from(node_id);
-        ensure_can_write(&client, node, &signer.account_id()).await?;
+        ensure_can_write(&cps, node, &signer.account_id()).await?;
 
         // Parse MQTT broker URL
         let (host, port) = parse_mqtt_url(&self.broker)?;
@@ -632,8 +632,8 @@ impl Config {
 
                     // Update node payload on blockchain
                     debug!("Updating node {} payload on blockchain", node_id);
-                    let submitted = match node.set_payload(node_data) {
-                        Ok(tx) => client.submit_finalized(&tx, &signer).await,
+                    let submitted = match cps.node(node).set_payload(node_data) {
+                        Ok(tx) => cps.submit_finalized(&tx, &signer).await,
                         Err(e) => Err(e),
                     };
                     // A failed update is logged and the bridge keeps running
@@ -805,8 +805,9 @@ impl Config {
         };
 
         // Subscribe to payload updates of the node in finalized blocks
-        let mut watcher = node
-            .watch_payload(&client)
+        let mut watcher = client
+            .node(node)
+            .watch_payload()
             .await
             .map_err(|e| anyhow!("Failed to subscribe to finalized blocks: {}", e))?;
 
@@ -941,9 +942,10 @@ pub type PublishHandler = Box<dyn Fn(&str, u64, &str) + Send + Sync>;
 /// # Errors
 ///
 /// Fails if the node does not exist or the runtime denies `Capability::Write`.
-async fn ensure_can_write(client: &Client, node: NodeId, account: &AccountId) -> Result<()> {
-    if node
-        .has_capability(client, account, Capability::Write)
+async fn ensure_can_write(cps: &Cps, node: NodeId, account: &AccountId) -> Result<()> {
+    if cps
+        .node(node)
+        .has_capability(account, Capability::Write)
         .await?
     {
         Ok(())

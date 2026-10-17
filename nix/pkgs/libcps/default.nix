@@ -19,7 +19,7 @@ rustPlatform.buildRustPackage {
     mainProgram = "cps";
     description = "Interacting with Robonomics CPS (Cyber-Physical Systems) pallet";
     license = licenses.asl20;
-    homepage = "https://github.com/airalab/robonomics";
+    homepage = "https://github.com/airalab/robins";
     maintainers = with maintainers; [ akru ];
     platforms = intersectLists platforms.unix (
       platforms.aarch64 ++ platforms.x86

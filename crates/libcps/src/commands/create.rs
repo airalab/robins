@@ -22,7 +22,7 @@ use crate::display;
 use anyhow::Result;
 use colored::*;
 use libcps::crypto::{EncryptionAlgorithm, Scheme, Signer};
-use libcps::{prelude::*, CreateNode, NodeId};
+use libcps::{CreateNode, NodeId};
 
 /// Create a root node (`parent == None`, which starts a new scope owned by the
 /// signer) or a child node.
@@ -38,7 +38,7 @@ pub async fn execute<S: Scheme>(
     receiver_public: Option<[u8; 32]>,
     algorithm: Option<EncryptionAlgorithm>,
 ) -> Result<()> {
-    let client = connection.client().await?;
+    let cps = connection.client().await?;
     let signer = connection.signer()?;
 
     match parent {
@@ -57,15 +57,16 @@ pub async fn execute<S: Scheme>(
     let params = CreateNode {
         meta: seal("metadata", meta)?,
         payload: seal("payload", payload)?,
+        identity: None,
     };
 
     let tx = match parent {
-        Some(parent) => NodeId::from(parent).create_child(params)?,
+        Some(parent) => cps.node(NodeId::from(parent)).create_child(params)?,
         None => libcps::create_root(params)?,
     };
 
     let spinner = display::spinner("Submitting transaction...");
-    let receipt = client.submit_finalized(&tx, &signer).await;
+    let receipt = cps.submit_finalized(&tx, &signer).await;
     spinner.finish_and_clear();
     let receipt = receipt?;
 

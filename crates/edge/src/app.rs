@@ -21,8 +21,11 @@
 //!
 //! ```text
 //!   HTTP ingress ─┐
-//!                 ├─▶ bounded channel ─▶ pipeline (verify→auth→dedup) ─▶ gossip
-//!   (future mesh)─┘                                                       publisher
+//!                 ├─▶ bounded channel ─▶ pipeline (verify→auth→dedup) ─┬▶ gossip publisher
+//!   Meshtastic ───┘                                                    │
+//!                                                                      └▶ batch sink ─▶ redb pending
+//!                                                                                          │
+//!                       CPS.set_payload ◀─ anchor ◀─ redb ready ◀─ batcher ◀──────────────┘
 //!   ops server (/health,/ready,/metrics,/debug/peers)
 //! ```
 //!
@@ -33,19 +36,24 @@
 //!
 //! [`shutdown`]: EdgeApp::shutdown
 
+use crate::anchor::{self, ChainConfig, RetryPolicy};
 use crate::auth;
+use crate::batch_store::{reconcile_format, BatchStore, RedbBatchStore};
+use crate::batcher::Batcher;
 use crate::config::Config;
 use crate::ingress::meshtastic::MeshtasticIngress;
 use crate::ingress::{self, Ingress, IngressSender};
 use crate::observability::{self, Health};
 use crate::p2p::{self, GossipConfig, GossipNode, PeerRegistry};
-use crate::pipeline::{ChannelSink, DedupCache, MessageSink, Pipeline};
+use crate::pipeline::{BatchSink, ChannelSink, DedupCache, MessageSink, Pipeline};
 use crate::shutdown::ShutdownController;
 use anyhow::Context;
+use libcps::NodeId;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
 
 /// Capacity of the pipeline → gossip publisher channel.
@@ -122,6 +130,14 @@ impl EdgeApp {
         } else {
             // No peer gating: the gateway is immediately ready.
             health.set_ready(true);
+        }
+
+        // Durable batching and CPS anchoring. The batch sink goes first so an
+        // envelope is on disk before any other sink sees it.
+        if config.blockchain.enabled {
+            spawn_anchoring(&config, &controller, &mut sinks, &mut tasks)
+                .await
+                .context("failed to start durable batching and anchoring")?;
         }
 
         // Acceptance pipeline.
@@ -209,6 +225,93 @@ fn install_metrics() -> metrics_exporter_prometheus::PrometheusHandle {
                 .handle()
         }
     }
+}
+
+/// Open the durable store and start the batcher and the CPS anchor.
+///
+/// Startup order: open redb, check the stored payload format against the
+/// configuration (refusing a change that would relabel prepared batches),
+/// then start the batcher (which resumes pending messages) and the anchor
+/// (which reconciles CPS metadata before it submits any payload, starting with
+/// batches prepared before the last shutdown). The chain connection is made
+/// inside the anchor task, so an unreachable chain never blocks ingestion.
+async fn spawn_anchoring(
+    config: &Config,
+    controller: &ShutdownController,
+    sinks: &mut Vec<Box<dyn MessageSink>>,
+    tasks: &mut Vec<JoinHandle<()>>,
+) -> anyhow::Result<()> {
+    let blockchain = &config.blockchain;
+    // Presence of these is enforced by `Config::validate`; re-checked here
+    // because `EdgeApp::start` accepts configs that were never validated.
+    let storage_path = config
+        .storage
+        .path
+        .clone()
+        .context("blockchain.enabled = true requires storage.path")?;
+    let key_file = blockchain
+        .key_file
+        .as_ref()
+        .context("blockchain.enabled = true requires blockchain.key_file")?;
+    let node_id = blockchain
+        .node_id
+        .context("blockchain.enabled = true requires blockchain.node_id")?;
+    config.batcher.validate().map_err(anyhow::Error::msg)?;
+
+    let suri = std::fs::read_to_string(key_file)
+        .with_context(|| format!("failed to read blockchain key file {}", key_file.display()))?
+        .trim()
+        .to_string();
+
+    if let Some(parent) = storage_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let open_path = storage_path.clone();
+    let store = tokio::task::spawn_blocking(move || RedbBatchStore::open(open_path))
+        .await
+        .context("storage open task failed")?
+        .with_context(|| format!("failed to open batch store {}", storage_path.display()))?;
+    let store: Arc<dyn BatchStore> = Arc::new(store);
+
+    let descriptor = config.batcher.format_descriptor();
+    let outcome = reconcile_format(store.as_ref(), &descriptor).await?;
+    let counts = store.counts().await?;
+    tracing::info!(
+        ?outcome,
+        pending_messages = counts.pending_messages,
+        ready_batches = counts.ready_batches,
+        "batch store opened"
+    );
+
+    let wake = Arc::new(Notify::new());
+    let ready = Arc::new(Notify::new());
+    sinks.insert(0, Box::new(BatchSink::new(store.clone(), wake.clone())));
+
+    let batcher =
+        Batcher::new(store.clone(), config.batcher.clone(), wake).with_ready_notify(ready.clone());
+    let batcher_shutdown = controller.subscribe();
+    tasks.push(tokio::spawn(batcher.run(batcher_shutdown)));
+
+    let chain = ChainConfig {
+        endpoint: blockchain.endpoint.clone(),
+        suri,
+        node: NodeId(node_id),
+        retry: RetryPolicy {
+            min: Duration::from_secs(blockchain.retry_min_secs),
+            max: Duration::from_secs(blockchain.retry_max_secs),
+        },
+        max_payload: libcps::MAX_PAYLOAD_SIZE,
+    };
+    let anchor_shutdown = controller.subscribe();
+    tasks.push(tokio::spawn(anchor::run_chain_anchor(
+        chain,
+        store,
+        descriptor,
+        ready,
+        anchor_shutdown,
+    )));
+    Ok(())
 }
 
 /// Bind and serve HTTP ingress, returning the bound address.

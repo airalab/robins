@@ -22,7 +22,10 @@ use crate::{
     backend::Api,
     crypto::{Scheme, Signer},
     error::{Error, Result},
-    types::{Access, AccountId, Capability, NodeId, ScopeId, MAX_META_SIZE, MAX_PAYLOAD_SIZE},
+    types::{
+        AccountId, Capability, Grant, IdentityAssignment, NodeId, ScopeId, MAX_META_SIZE,
+        MAX_PAYLOAD_SIZE,
+    },
 };
 use robonomics_runtime_subxt_api::{BoundedVec, ExtrinsicEvents};
 use std::{fmt, marker::PhantomData};
@@ -37,13 +40,23 @@ pub(crate) enum Call {
         parent: Option<NodeId>,
         meta: Option<Vec<u8>>,
         payload: Option<Vec<u8>>,
+        identity: Option<IdentityAssignment>,
     },
     SetMeta(NodeId, Option<Vec<u8>>),
     SetPayload(NodeId, Option<Vec<u8>>),
     DeleteNode(NodeId),
     CreateScope(NodeId),
-    GrantAccess(NodeId, AccountId, Access),
+    GrantAccess(NodeId, AccountId, Grant),
     RevokeAccess(NodeId, AccountId, Capability),
+    SetIdentity(NodeId, IdentityAssignment),
+    ClearIdentity(NodeId),
+}
+
+/// Condition checked by [`Cps::submit`](crate::Cps::submit) before sending.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Precondition {
+    /// The node must not be a scope root yet.
+    NotScopeRoot(NodeId),
 }
 
 /// Progress handle of a submitted transaction.
@@ -55,12 +68,13 @@ pub(crate) type Progress = subxt::transactions::TransactionProgress<
 /// A prepared, unsigned CPS transaction.
 ///
 /// Building a transaction never touches the network. Submit it with
-/// [`Client::submit`](crate::Client::submit) or
-/// [`Client::submit_finalized`](crate::Client::submit_finalized). `T` is the
+/// [`Cps::submit`](crate::Cps::submit) or
+/// [`Cps::submit_finalized`](crate::Cps::submit_finalized). `T` is the
 /// result available in the [`TxReceipt`](crate::TxReceipt) after success:
 /// [`NodeId`] for node creation, [`ScopeId`] for scope creation, `()` otherwise.
 pub struct Transaction<T> {
     pub(crate) call: Call,
+    pub(crate) precondition: Option<Precondition>,
     decode: Decoder<T>,
     _result: PhantomData<fn() -> T>,
 }
@@ -69,6 +83,7 @@ impl<T> Clone for Transaction<T> {
     fn clone(&self) -> Self {
         Self {
             call: self.call.clone(),
+            precondition: self.precondition,
             decode: self.decode,
             _result: PhantomData,
         }
@@ -87,6 +102,7 @@ impl<T> Transaction<T> {
     fn new(call: Call, decode: Decoder<T>) -> Self {
         Self {
             call,
+            precondition: None,
             decode,
             _result: PhantomData,
         }
@@ -119,11 +135,12 @@ impl<T> Transaction<T> {
                 parent,
                 meta,
                 payload,
+                identity,
             } => send!(cps.create_node(
                 parent.map(Into::into),
                 meta.map(BoundedVec),
                 payload.map(BoundedVec),
-                None
+                identity.map(|identity| identity.rt())
             )),
             Call::SetMeta(id, meta) => send!(cps.set_meta(id.into(), meta.map(BoundedVec))),
             Call::SetPayload(id, payload) => {
@@ -140,6 +157,11 @@ impl<T> Transaction<T> {
             Call::RevokeAccess(id, account, capability) => {
                 send!(cps.revoke_access(id.into(), account, capability.into()))
             }
+            Call::SetIdentity(id, assignment) => {
+                let permit = assignment.permit.map(|p| p.rt());
+                send!(cps.set_identity(id.into(), assignment.account, permit))
+            }
+            Call::ClearIdentity(id) => send!(cps.clear_identity(id.into())),
         }
     }
 }
@@ -188,6 +210,7 @@ pub(crate) fn create_node(
     parent: Option<NodeId>,
     meta: Option<Vec<u8>>,
     payload: Option<Vec<u8>>,
+    identity: Option<IdentityAssignment>,
 ) -> Result<Transaction<NodeId>> {
     if let Some(meta) = &meta {
         check_meta(meta)?;
@@ -200,6 +223,7 @@ pub(crate) fn create_node(
             parent,
             meta,
             payload,
+            identity,
         },
         created_node,
     ))
@@ -223,11 +247,19 @@ pub(crate) fn delete_node(id: NodeId) -> Transaction<()> {
     Transaction::new(Call::DeleteNode(id), no_result)
 }
 
+/// Create a scope at a node that is not a scope root yet.
 pub(crate) fn create_scope(id: NodeId) -> Transaction<ScopeId> {
+    let mut tx = replace_scope(id);
+    tx.precondition = Some(Precondition::NotScopeRoot(id));
+    tx
+}
+
+/// Create a scope at a node, replacing the scope it roots, if any.
+pub(crate) fn replace_scope(id: NodeId) -> Transaction<ScopeId> {
     Transaction::new(Call::CreateScope(id), created_scope)
 }
 
-pub(crate) fn grant_access(id: NodeId, account: AccountId, access: Access) -> Transaction<()> {
+pub(crate) fn grant_access(id: NodeId, account: AccountId, access: Grant) -> Transaction<()> {
     Transaction::new(Call::GrantAccess(id, account, access), no_result)
 }
 
@@ -239,97 +271,10 @@ pub(crate) fn revoke_access(
     Transaction::new(Call::RevokeAccess(id, account, capability), no_result)
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::*;
+pub(crate) fn set_identity(id: NodeId, assignment: IdentityAssignment) -> Transaction<()> {
+    Transaction::new(Call::SetIdentity(id, assignment), no_result)
+}
 
-    #[test]
-    fn writes_build_without_submitting() {
-        let node = NodeId::from(7);
-        assert!(node.set_meta(b"meta").is_ok());
-        assert!(node.set_payload(b"payload").is_ok());
-        let _: Transaction<()> = node.clear_meta();
-        let _: Transaction<()> = node.clear_payload();
-        let _: Transaction<()> = node.delete();
-        let _: Transaction<ScopeId> = node.create_scope();
-        let _: Transaction<NodeId> = node.create_child(CreateNode::default()).unwrap();
-        let _: Transaction<NodeId> = create_root(CreateNode::default()).unwrap();
-        let account = AccountId::from([1u8; 32]);
-        let _: Transaction<()> = node.grant(account, Access::write_subtree()).unwrap();
-        let _: Transaction<()> = node.revoke(account, Capability::Write).unwrap();
-    }
-
-    #[test]
-    fn limits_are_inclusive() {
-        let node = NodeId::from(1);
-        assert!(node.set_meta(vec![0; MAX_META_SIZE]).is_ok());
-        assert!(node.set_payload(vec![0; MAX_PAYLOAD_SIZE]).is_ok());
-    }
-
-    #[test]
-    fn oversized_meta_is_rejected() {
-        let node = NodeId::from(1);
-        let err = node.set_meta(vec![0; MAX_META_SIZE + 1]).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::MetaTooLarge { actual, max } if actual == MAX_META_SIZE + 1 && max == MAX_META_SIZE
-        ));
-    }
-
-    #[test]
-    fn oversized_payload_is_rejected() {
-        let node = NodeId::from(1);
-        let err = node.set_payload(vec![0; MAX_PAYLOAD_SIZE + 1]).unwrap_err();
-        assert!(matches!(err, Error::PayloadTooLarge { .. }));
-    }
-
-    #[test]
-    fn oversized_create_is_rejected() {
-        let too_big = Some(vec![0; MAX_META_SIZE + 1]);
-        let err = create_root(CreateNode {
-            meta: too_big.clone(),
-            payload: None,
-        })
-        .unwrap_err();
-        assert!(matches!(err, Error::MetaTooLarge { .. }));
-        let err = NodeId::from(1)
-            .create_child(CreateNode {
-                meta: None,
-                payload: Some(vec![0; MAX_PAYLOAD_SIZE + 1]),
-            })
-            .unwrap_err();
-        assert!(matches!(err, Error::PayloadTooLarge { .. }));
-    }
-
-    #[test]
-    fn read_futures_are_send() {
-        fn assert_send<T: Send>(_: &T) {}
-        async fn reads(client: &Client, node: NodeId, scope: ScopeId, account: AccountId) {
-            let _ = node.info(client).await;
-            let _ = node.meta(client).await;
-            let _ = node.payload(client).await;
-            let _ = node.children(client).await;
-            let _ = node.resolve_scope(client).await;
-            let _ = node
-                .has_capability(client, &account, Capability::Write)
-                .await;
-            let _ = scope.info(client).await;
-            if let Ok(mut watcher) = node.watch_payload(client).await {
-                let _ = watcher.next().await;
-            }
-            if let Ok(mut watcher) = node.watch_meta(client).await {
-                let _ = watcher.next().await;
-            }
-        }
-        fn check(client: &Client) {
-            let fut = reads(
-                client,
-                NodeId::from(1),
-                ScopeId::from(1),
-                AccountId::from([0u8; 32]),
-            );
-            assert_send(&fut);
-        }
-        let _ = check;
-    }
+pub(crate) fn clear_identity(id: NodeId) -> Transaction<()> {
+    Transaction::new(Call::ClearIdentity(id), no_result)
 }

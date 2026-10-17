@@ -4,9 +4,10 @@
 # edit to taste. Generate a fresh default with `edge config generate` and
 # validate any file with `edge config check --config <path>`.
 #
-# Only the [http], [auth], [pubsub], [metrics], [pipeline] and [meshtastic]
-# sections are active in the MVP build; [ipfs], [blockchain] and [storage]
-# describe deferred subsystems and are shown here disabled for reference.
+# The [http], [auth], [pubsub], [metrics], [pipeline] and [meshtastic] sections
+# are always active. [blockchain], [batcher] and [storage] enable durable
+# batching with on-chain CPS anchoring; [ipfs] is a deferred subsystem shown
+# here disabled for reference.
 
 # --- HTTP ingress -----------------------------------------------------------
 # Accepts signed protocol envelopes via `POST /telemetry/v1`.
@@ -78,12 +79,44 @@ reassembly_absolute_timeout_secs = 300
 reconnect_min_secs = 1
 reconnect_max_secs = 30
 
-# --- Deferred subsystems (inactive in the MVP build) ------------------------
-[ipfs]
-enabled = false
-providers = []
+# --- Durable batching + CPS anchoring -----------------------------------------
+# With `[blockchain] enabled = true`, every accepted envelope is first persisted
+# to the embedded redb file at `[storage].path`, then batched and anchored:
+#
+#   persisted envelope -> batch (SignedEnvelopeBatch, serialized, compressed)
+#     -> persisted batch -> CPS.set_payload(exact bytes) -> finalized -> removed
+#
+# Messages and prepared batches survive restarts; delivery is at-least-once (a
+# batch may be anchored twice if the daemon stops after finalization but
+# before the local cleanup). The CPS node metadata is kept in sync with the
+# payload format at startup, and changing `compression` while prepared batches
+# are still waiting to be anchored is refused.
+[batcher]
+# Flush once the oldest message has waited this long (measured from when it
+# was received, so it still applies after a restart).
+max_batch_age_secs = 30
+# Maximum size of the final (compressed) payload; at most 8192 (CPS limit).
+max_batch_size = 8192
+# Maximum envelopes per batch.
+max_messages = 100
+# "zstd" or "none". Documented in the CPS node metadata.
+compression = "zstd"
 
 [blockchain]
 enabled = false
+# endpoint = "ws://127.0.0.1:9944"
+# File containing the anchoring account secret URI.
+# key_file = "/etc/edge/secrets/anchor-key"
+# CPS node receiving the batches; the account needs write access to it.
+# node_id = 1
+# Back-off for transient chain failures.
+retry_min_secs = 1
+retry_max_secs = 60
 
 [storage]
+# path = "/var/lib/edge/batcher.redb"
+
+# --- Deferred subsystems (inactive) -----------------------------------------
+[ipfs]
+enabled = false
+providers = []
