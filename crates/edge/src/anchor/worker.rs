@@ -160,6 +160,9 @@ impl Anchor {
     {
         let mut attempt = 0u32;
         loop {
+            if shutdown.is_triggered() {
+                return Ok(Retried::Shutdown);
+            }
             let mut stop = shutdown.clone();
             let result = tokio::select! {
                 result = op() => result,
