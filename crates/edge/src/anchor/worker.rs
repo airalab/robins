@@ -208,7 +208,12 @@ pub async fn run_chain_anchor(
 ) {
     let mut attempt = 0u32;
     let target = loop {
-        match LibcpsTarget::connect(chain.endpoint.as_deref(), &chain.suri, chain.node).await {
+        let result = tokio::select! {
+            biased;
+            _ = shutdown.recv() => return,
+            result = LibcpsTarget::connect(chain.endpoint.as_deref(), &chain.suri, chain.node) => result,
+        };
+        match result {
             Ok(target) => break target,
             Err(error) if error.is_transient() => {
                 let delay = chain.retry.delay(attempt);
