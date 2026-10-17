@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Build and validate CPS transactions offline.
 //!
 //! Transactions are plain prepared values: building one never touches the

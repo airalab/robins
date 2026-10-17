@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! [`Cps`], the single entry point to CPS: connection, handles, reads and submission.
 
 use crate::{

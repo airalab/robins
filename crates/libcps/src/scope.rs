@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Scope handles: [`Scope`] (latest finalized block) and [`ScopeAt`] (pinned block).
 
 use crate::{

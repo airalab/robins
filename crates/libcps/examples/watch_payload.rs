@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Follow node data changes with watchers on a local testnet.
 //!
 //! [`Node::watch_payload`] and [`Node::watch_meta`] yield an update for every finalized

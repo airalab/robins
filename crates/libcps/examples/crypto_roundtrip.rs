@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Encrypt and decrypt data offline with the `crypto` module.
 //!
 //! No chain connection is needed. The example shows, in order:

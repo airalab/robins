@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Live-node integration tests for CPS 1.1 node identity and address views.
 //!
 //! They need a running Robonomics dev node (runtime v52), so they are

@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Crate-private chain reads at a fixed block.
 //!
 //! Every function reads from the given [`At`], so that all reads sharing one
