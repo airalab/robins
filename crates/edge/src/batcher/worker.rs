@@ -28,6 +28,9 @@ use std::time::Duration;
 /// Back-off before retrying after a store failure.
 const STORE_RETRY_DELAY: Duration = Duration::from_secs(1);
 
+/// How often store-backed gauges are refreshed when nothing else wakes the loop.
+const GAUGE_REFRESH: Duration = Duration::from_secs(5);
+
 impl Batcher {
     /// Batch pending messages until `shutdown` fires, then flush the open
     /// batch.
@@ -43,19 +46,27 @@ impl Batcher {
             compression = %self.config.compression,
             "batcher started"
         );
+        // The tick also wakes the loop while nothing is pending, so gauges
+        // that depend on the store (confirmed batches, oldest age) stay fresh.
+        let mut gauge_tick =
+            tokio::time::interval_at(tokio::time::Instant::now() + GAUGE_REFRESH, GAUGE_REFRESH);
+        gauge_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            let next = match self.flush_due(Timestamp::now()).await {
-                Ok(next) => next,
+            // The returned delay is relative to this instant, so the deadline
+            // must be too: time spent flushing must not extend message age.
+            let pass_started = tokio::time::Instant::now();
+            let deadline_at = match self.flush_due(Timestamp::now()).await {
+                Ok(next) => next.map(|delay| pass_started + delay),
                 Err(error) => {
                     tracing::error!(%error, "batching failed; retrying");
-                    Some(STORE_RETRY_DELAY)
+                    Some(tokio::time::Instant::now() + STORE_RETRY_DELAY)
                 }
             };
             self.report_gauges().await;
 
             let deadline = async {
-                match next {
-                    Some(delay) => tokio::time::sleep(delay).await,
+                match deadline_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
                     None => std::future::pending().await,
                 }
             };
@@ -63,6 +74,7 @@ impl Batcher {
                 _ = shutdown.recv() => break,
                 _ = self.wake.notified() => {}
                 _ = deadline => {}
+                _ = gauge_tick.tick() => {}
             }
         }
 

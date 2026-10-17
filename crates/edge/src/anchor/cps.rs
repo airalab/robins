@@ -20,12 +20,11 @@
 use super::{AnchorError, Confirmation, CpsTarget};
 use async_trait::async_trait;
 use libcps::crypto::{Signer, Sr25519};
-use libcps::prelude::*;
-use libcps::{Capability, Client, Error as CpsError, NodeId};
+use libcps::{Capability, Cps, Error as CpsError, NodeId};
 
 /// A CPS node reachable through `libcps`, with the account that signs for it.
 pub struct LibcpsTarget {
-    client: Client,
+    cps: Cps,
     signer: Signer<Sr25519>,
     node: NodeId,
 }
@@ -46,10 +45,11 @@ impl LibcpsTarget {
     ) -> Result<Self, AnchorError> {
         let signer = Signer::<Sr25519>::from_suri(suri)
             .map_err(|e| AnchorError::Permanent(format!("invalid signing key: {e}")))?;
-        let client = Client::connect(endpoint).await.map_err(classify)?;
+        let cps = Cps::connect(endpoint).await.map_err(classify)?;
         let account = signer.account_id();
-        let can_write = node
-            .has_capability(&client, &account, Capability::Write)
+        let can_write = cps
+            .node(node)
+            .has_capability(&account, Capability::Write)
             .await
             .map_err(classify)?;
         if !can_write {
@@ -57,24 +57,20 @@ impl LibcpsTarget {
                 "account {account} has no write access to CPS node {node}"
             )));
         }
-        Ok(Self {
-            client,
-            signer,
-            node,
-        })
+        Ok(Self { cps, signer, node })
     }
 }
 
 #[async_trait]
 impl CpsTarget for LibcpsTarget {
     async fn meta(&self) -> Result<Option<Vec<u8>>, AnchorError> {
-        self.node.meta(&self.client).await.map_err(classify)
+        self.cps.node(self.node).meta().await.map_err(classify)
     }
 
     async fn set_meta(&self, meta: &[u8]) -> Result<Confirmation, AnchorError> {
-        let tx = self.node.set_meta(meta).map_err(classify)?;
+        let tx = self.cps.node(self.node).set_meta(meta).map_err(classify)?;
         let receipt = self
-            .client
+            .cps
             .submit_finalized(&tx, &self.signer)
             .await
             .map_err(classify)?;
@@ -85,9 +81,13 @@ impl CpsTarget for LibcpsTarget {
     }
 
     async fn set_payload(&self, payload: &[u8]) -> Result<Confirmation, AnchorError> {
-        let tx = self.node.set_payload(payload).map_err(classify)?;
+        let tx = self
+            .cps
+            .node(self.node)
+            .set_payload(payload)
+            .map_err(classify)?;
         let receipt = self
-            .client
+            .cps
             .submit_finalized(&tx, &self.signer)
             .await
             .map_err(classify)?;
@@ -99,6 +99,9 @@ impl CpsTarget for LibcpsTarget {
 }
 
 /// Split `libcps` failures into retryable and permanent ones.
+///
+/// A finalized dispatch failure ([`CpsError::Dispatch`]) is permanent: the
+/// runtime would reject the same call again.
 fn classify(error: CpsError) -> AnchorError {
     match error {
         CpsError::Connection(_)
@@ -107,5 +110,16 @@ fn classify(error: CpsError) -> AnchorError {
         | CpsError::Runtime(_)
         | CpsError::Transaction(_) => AnchorError::Transient(error.to_string()),
         other => AnchorError::Permanent(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_failures_are_permanent_and_submission_failures_transient() {
+        assert!(!classify(CpsError::Dispatch("Module error".into())).is_transient());
+        assert!(classify(CpsError::Transaction("connection dropped".into())).is_transient());
     }
 }
