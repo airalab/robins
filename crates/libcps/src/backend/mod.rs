@@ -20,11 +20,9 @@
 //! Nothing in this module is part of the public API: Subxt types stay behind
 //! [`crate::Client`] and [`crate::Transaction`].
 
-mod light;
 mod rpc;
 
-pub(crate) use light::connect_light;
-pub(crate) use rpc::connect_rpc;
+pub(crate) use rpc::connect;
 
 use robonomics_runtime_subxt_api::RobonomicsConfig;
 

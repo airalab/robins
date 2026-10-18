@@ -77,10 +77,10 @@ Two rules explain almost every example:
 
 ## 1. Read the chain: `light_client_read`
 
-**Teaches:** `Cps::connect_light`, `Cps::finalized`, `NodeAt` reads, `Result`/`Error`.
+**Teaches:** `LightNode`, `Cps::connect`, `Cps::finalized`, `NodeAt` reads, `Result`/`Error`.
 
-The simplest thing you can do with `libcps`: read. No endpoint, no keys. The embedded light
-client syncs the Polkadot relay chain and the Robonomics parachain over p2p (the specs ship in
+The simplest thing you can do with `libcps`: read. No endpoint, no keys. An embedded `LightNode`
+serves a local RPC endpoint for the RPC-only `Cps`; it syncs the Polkadot relay chain and the Robonomics parachain over p2p (the specs ship in
 `robonomics-chain-spec`), so the first run waits until a finalized block is available.
 
 ```bash
@@ -92,7 +92,8 @@ CPS_ROOT_NODE=<ROOT_NODE_ID> cargo run -p libcps --example light_client_read --n
 The core of it:
 
 ```rust
-let cps = libcps::Cps::connect_light().await?;     // or Cps::connect(Some(url)) for RPC
+let light = LightNode::start(LightNodeConfig::default()).await?;
+let cps = libcps::Cps::connect(light.rpc_url()).await?;  // or any RPC URL
 let at = cps.finalized().await?;                   // pin one finalized block
 
 let node = at.node(NodeId::from(root));
@@ -108,8 +109,8 @@ Things to notice:
 - Everything read through `at` comes from the same block, so the printed tree is a consistent
   snapshot even while the chain moves on. Without `at`, `cps.node(id).payload()` reads the latest
   finalized block once per call.
-- `Cps::connect(Some(url))` uses RPC and `Cps::connect(None)` starts the light client; both
-  expose the identical API.
+- `Cps` is RPC-only: `Cps::connect(url)` works the same with a full node, a remote service or
+  the local `LightNode`.
 
 ## 2. Build transactions: `offline_transactions`
 
@@ -150,7 +151,7 @@ Things to notice:
 
 ## 3. Write to a node: `rpc_client_write`
 
-**Teaches:** `Cps::connect_rpc`, `create_root`, `create_child`, `set_payload`/`set_meta`, `delete`,
+**Teaches:** `Cps::connect`, `create_root`, `create_child`, `set_payload`/`set_meta`, `delete`,
 `submit` vs `submit_finalized`, `TxReceipt`.
 
 The classic write flow against a local dev node: create a tree, update it, read it back, delete it.
@@ -161,7 +162,7 @@ cargo run -p libcps --example rpc_client_write --no-default-features
 
 ```rust
 let signer = Signer::<Sr25519>::from_suri("//Alice")?;
-let cps = Cps::connect_rpc("ws://127.0.0.1:9944").await?;
+let cps = Cps::connect("ws://127.0.0.1:9944").await?;
 
 // 1. build (no network) ...
 let tx = libcps::create_root(CreateNode::new().meta(b"HQ"))?;
@@ -383,7 +384,7 @@ Things to notice:
 
 ## CLI examples (shell scripts)
 
-Set `ROBONOMICS_WS_URL` (omit it to use the embedded light client) and `ROBONOMICS_SURI`
+Set `ROBONOMICS_WS_URL` (default `ws://127.0.0.1:9944`; run `cps lc` for a local light client) and `ROBONOMICS_SURI`
 first, e.g. against the development node above:
 
 ```bash
@@ -402,7 +403,7 @@ Ordered like the tutorial, from the most used to the most advanced.
 
 | Task | Call |
 | --- | --- |
-| Connect (RPC / light client) | `Cps::connect(Some(url))`, `Cps::connect(None)`, `connect_rpc`, `connect_light` |
+| Connect (RPC) | `Cps::connect(url)` (local light node: `LightNode::start(..)`, then `light.rpc_url()`) |
 | Read a node | `cps.node(id).info() / meta() / payload() / children() / parent()` |
 | Consistent multi-read | `let at = cps.finalized().await?` (or `cps.at(hash)`), then `at.node(id)...` |
 | Create / update / delete | `libcps::create_root(..)`, `node.create_child(..)`, `set_meta`, `set_payload`, `clear_*`, `delete` |

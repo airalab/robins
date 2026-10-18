@@ -11,7 +11,7 @@ broker = "mqtt://localhost:1883"
 
 # Blockchain Configuration
 [blockchain]
-# RPC endpoint. Omit ws_url to use the embedded light client instead.
+# RPC endpoint. Omit ws_url to use an embedded light node instead.
 ws_url = "ws://localhost:9944"
 # Account secret URI (e.g., //Alice, //Bob, or seed phrase)
 suri = "//Alice"

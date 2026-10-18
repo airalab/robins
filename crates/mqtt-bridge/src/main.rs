@@ -96,7 +96,7 @@ struct Cli {
     #[arg(long, env = "ROBONOMICS_WS_URL", default_value = "ws://localhost:9944")]
     ws_url: String,
 
-    /// Use the embedded light client instead of the RPC endpoint
+    /// Use an embedded light node instead of the RPC endpoint
     #[arg(long, env = "ROBONOMICS_LIGHT_CLIENT")]
     light_client: bool,
 

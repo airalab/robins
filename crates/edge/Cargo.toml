@@ -50,7 +50,7 @@ zstd.workspace = true
 redb.workspace = true
 # CPS anchoring (`Client`, `NodeId::set_payload`/`set_meta`) and, for the CLI,
 # `libcps::crypto::Cipher` to encrypt `private:` sections (ECDH + AEAD).
-libcps.workspace = true
+libcps = { workspace = true, features = ["light-client"] }
 
 # Connectivity Protocol runtime. The wire types are generated (and committed)
 # from the vendored `.proto` files under `src/protobufs/` with `prost-build` and

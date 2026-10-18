@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let suri = std::env::var("ROBONOMICS_SURI").unwrap_or_else(|_| "//Alice".to_string());
     let signer = Signer::<Sr25519>::from_suri(&suri)?;
     let account = signer.account_id();
-    let cps = Cps::connect_rpc(&url).await?;
+    let cps = Cps::connect(&url).await?;
 
     // A root node can only get the signer itself as identity; no permit is needed.
     let root = cps

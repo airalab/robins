@@ -21,7 +21,7 @@ use super::Api;
 use crate::error::{Error, Result};
 
 /// Connect to a node RPC endpoint (`ws://`, `wss://`).
-pub(crate) async fn connect_rpc(url: &str) -> Result<Api> {
+pub(crate) async fn connect(url: &str) -> Result<Api> {
     Api::from_url(url)
         .await
         .map_err(|e| Error::Connection(Box::new(e)))

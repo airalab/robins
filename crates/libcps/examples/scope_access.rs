@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let suri = std::env::var("ROBONOMICS_SURI").unwrap_or_else(|_| "//Alice".to_string());
     let owner = Signer::<Sr25519>::from_suri(&suri)?;
     let bob = Signer::<Sr25519>::from_suri("//Bob")?;
-    let cps = Cps::connect_rpc(&url).await?;
+    let cps = Cps::connect(&url).await?;
 
     let root = create(&cps, &owner, None).await?;
     let room = create(&cps, &owner, Some(root)).await?;

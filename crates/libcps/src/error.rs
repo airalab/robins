@@ -39,10 +39,6 @@ pub enum Error {
     #[error("RPC request failed: {0}")]
     Rpc(#[source] Source),
 
-    /// The embedded light client could not be started.
-    #[error("light client failed: {0}")]
-    LightClient(#[source] Source),
-
     /// A storage query, runtime API call or SCALE decoding failed.
     #[error("runtime query failed: {0}")]
     Runtime(#[source] Source),

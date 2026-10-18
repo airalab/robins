@@ -1,6 +1,6 @@
 [package]
 name = "libcps"
-version = "0.7.0"
+version = "0.8.0"
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -32,7 +32,7 @@ subxt.workspace = true
 sp-core.workspace = true
 parity-scale-codec.workspace = true
 robonomics-runtime-subxt-api.workspace = true
-robonomics-chain-spec.workspace = true
+robonomics-chain-spec = { workspace = true, optional = true }
 
 # Cryptography
 curve25519-dalek.workspace = true
@@ -41,6 +41,11 @@ chacha20poly1305.workspace = true
 aes-gcm.workspace = true
 hkdf.workspace = true
 sha2.workspace = true
+
+# Light client
+smoldot-light = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 
 # CLI & Output
 clap = { workspace = true, features = ["env"], optional = true }
@@ -64,7 +69,23 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [features]
 default = ["cli"]
-cli = ["clap", "colored", "indicatif", "tracing-subscriber"]
+# Embedded smoldot light node serving a local JSON-RPC endpoint (`libcps::light`).
+light-client = [
+  "dep:smoldot-light",
+  "dep:tokio-tungstenite",
+  "dep:futures-util",
+  "dep:robonomics-chain-spec",
+]
+# The `cps` binary always includes the light client (`cps light-client`).
+cli = ["light-client", "clap", "colored", "indicatif", "tracing-subscriber"]
+
+[[example]]
+name = "light_client_read"
+required-features = ["light-client"]
+
+[[test]]
+name = "light_node"
+required-features = ["light-client"]
 
 [package.metadata.docs.rs]
 all-features = true

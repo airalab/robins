@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let suri = std::env::var("ROBONOMICS_SURI").unwrap_or_else(|_| "//Alice".to_string());
 
     let signer = Signer::<Sr25519>::from_suri(&suri)?;
-    let cps = Cps::connect_rpc(&url).await?;
+    let cps = Cps::connect(&url).await?;
     println!("Connected to {url} as {}", signer.account_id());
 
     // Creating a root node also creates a scope owned by the signer. A root can

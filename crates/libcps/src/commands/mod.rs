@@ -18,6 +18,7 @@
 //! CLI command implementations.
 
 pub mod create;
+pub mod light_client;
 pub mod remove;
 pub mod set_meta;
 pub mod set_payload;
@@ -31,8 +32,8 @@ use parity_scale_codec::Encode;
 
 /// Connection settings shared by all commands.
 pub struct Connection {
-    /// RPC endpoint; `None` starts the embedded light client.
-    pub url: Option<String>,
+    /// RPC endpoint (`ws://` or `wss://`).
+    pub url: String,
     /// Secret URI of the account: signs transactions (SR25519) and, for encryption
     /// and decryption, is the keypair of the selected scheme.
     pub suri: Option<String>,
@@ -42,11 +43,8 @@ impl Connection {
     /// Connect to the chain, reporting progress.
     pub async fn client(&self) -> Result<Cps> {
         display::progress("Connecting to blockchain...");
-        let client = Cps::connect(self.url.as_deref()).await?;
-        match &self.url {
-            Some(url) => display::info(&format!("Connected to {url}")),
-            None => display::info("Connected through the embedded light client"),
-        }
+        let client = Cps::connect(&self.url).await?;
+        display::info(&format!("Connected to {}", self.url));
         Ok(client)
     }
 

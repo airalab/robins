@@ -28,8 +28,10 @@ use crate::{
     types::{AccountId, Hash, NodeId, ScopeId},
 };
 
-/// Connection to a Robonomics chain, over a direct RPC connection or an
-/// embedded light client.
+/// Connection to a Robonomics chain over JSON-RPC.
+///
+/// The endpoint may be a full node, a remote RPC service or a local
+/// `libcps::light::LightNode` (feature `light-client`); `Cps` does not care.
 ///
 /// `Cps` is the only entry point to CPS. It hands out lightweight handles:
 ///
@@ -44,7 +46,7 @@ use crate::{
 ///
 /// ```no_run
 /// # async fn run(node_id: libcps::NodeId) -> libcps::Result<()> {
-/// let cps = libcps::Cps::connect(Some("ws://127.0.0.1:9944")).await?;
+/// let cps = libcps::Cps::connect("ws://127.0.0.1:9944").await?;
 /// let info = cps.node(node_id).info().await?;
 /// # Ok(()) }
 /// ```
@@ -53,39 +55,14 @@ pub struct Cps {
 }
 
 impl Cps {
-    /// Connect to the chain.
-    ///
-    /// - `Some(url)` connects to the RPC endpoint (`ws://` / `wss://`);
-    /// - `None` starts an embedded light client syncing the Polkadot relay
-    ///   chain and the Robonomics parachain (see [`Cps::connect_light`]).
+    /// Connect to the RPC endpoint at `url` (`ws://` or `wss://`).
     ///
     /// # Errors
     ///
-    /// [`Error::Connection`] for RPC endpoints, [`Error::LightClient`] when the
-    /// light client cannot be started.
-    pub async fn connect(url: Option<&str>) -> Result<Self> {
-        match url {
-            Some(url) => Self::connect_rpc(url).await,
-            None => Self::connect_light().await,
-        }
-    }
-
-    /// Connect to the RPC endpoint at `url`.
-    pub async fn connect_rpc(url: &str) -> Result<Self> {
+    /// [`Error::Connection`] if the endpoint cannot be reached.
+    pub async fn connect(url: &str) -> Result<Self> {
         Ok(Self {
-            client: backend::connect_rpc(url).await?,
-        })
-    }
-
-    /// Start the embedded light client.
-    ///
-    /// It uses the Polkadot relay chain and Robonomics parachain specs embedded in
-    /// `robonomics-chain-spec`, so no endpoint is needed. The light client lives as long
-    /// as the `Cps`. The first queries may wait until the
-    /// light client has synced a finalized block.
-    pub async fn connect_light() -> Result<Self> {
-        Ok(Self {
-            client: backend::connect_light().await?,
+            client: backend::connect(url).await?,
         })
     }
 

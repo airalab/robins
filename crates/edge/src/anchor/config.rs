@@ -50,7 +50,7 @@ impl Default for RetryPolicy {
 /// Everything needed to reach the chain and sign anchoring transactions.
 #[derive(Clone)]
 pub struct ChainConfig {
-    /// RPC endpoint (`ws://` / `wss://`); `None` starts the embedded light client.
+    /// RPC endpoint (`ws://` / `wss://`); `None` starts an embedded light node on a free local port.
     pub endpoint: Option<String>,
     /// Secret URI of the signing account. Never logged.
     pub suri: String,

@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("ROBONOMICS_WS_URL").unwrap_or_else(|_| "ws://127.0.0.1:9944".to_string());
     let suri = std::env::var("ROBONOMICS_SURI").unwrap_or_else(|_| "//Alice".to_string());
     let signer = Signer::<Sr25519>::from_suri(&suri)?;
-    let cps = Cps::connect_rpc(&url).await?;
+    let cps = Cps::connect(&url).await?;
 
     let node = cps
         .submit_finalized(&libcps::create_root(CreateNode::new())?, &signer)

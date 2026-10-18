@@ -20,7 +20,7 @@ A command-line interface for quick access to CPS pallet functionality.
 - ⚙️ **Flexible configuration** via environment variables or CLI args
 - 🔒 **Secure by design** with proper key management and ECDH key agreement
 - 📚 **Comprehensive documentation** for library API
-- 🔧 **Type-safe CPS 1.1 API**: single `Cps` entry point, `Node`/`Address` handles, block-pinned reads, node identities, opaque `Transaction<T>`, RPC or embedded light client
+- 🔧 **Type-safe CPS 1.1 API**: single `Cps` entry point, `Node`/`Address` handles, block-pinned reads, node identities, opaque `Transaction<T>`, RPC-only `Cps`, plus an optional embedded smoldot light node (`libcps::light`, feature `light-client`)
 - 🎛️ **Feature flags** for flexible dependency management
 
 ## 🏗️ Architecture
@@ -55,7 +55,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-libcps = "0.7.0"
+libcps = "0.8.0"
 ```
 
 #### Feature Flags
@@ -67,11 +67,11 @@ The library supports optional feature flags for flexible dependency management:
 ```toml
 # Default: CLI feature enabled
 [dependencies]
-libcps = "0.7.0"
+libcps = "0.8.0"
 
 # Library only, without CLI dependencies
 [dependencies]
-libcps = { version = "0.7.0", default-features = false }
+libcps = { version = "0.8.0", default-features = false }
 ```
 
 ### CLI Tool from Crates.io
@@ -113,7 +113,8 @@ sudo cp target/release/cps /usr/local/bin/
 ### 1. Set up your environment
 
 ```bash
-# Set blockchain endpoint (optional: without it the embedded light client is used)
+# Set blockchain endpoint (default ws://127.0.0.1:9944). Without a local full node,
+# run `cps lc` in another terminal: it serves the embedded light client on that address.
 export ROBONOMICS_WS_URL=ws://localhost:9944
 
 # Set your account (development account for testing)
@@ -240,7 +241,7 @@ cps remove 5 --force
 ### Environment Variables
 
 ```bash
-# Blockchain connection (omit to start the embedded light client)
+# Blockchain connection (default ws://127.0.0.1:9944, e.g. `cps lc`)
 export ROBONOMICS_WS_URL=ws://localhost:9944
 
 # Account credentials
@@ -281,15 +282,36 @@ There is one CPS tree with two ways to address it. `NodeId` is the canonical str
 ```rust
 use libcps::Cps;
 
-// Direct RPC connection
-let cps = Cps::connect(Some("wss://polkadot.rpc.robonomics.network")).await?;
-
-// No URL: start the embedded light client (Polkadot relay chain + Robonomics
-// parachain specs from `robonomics-chain-spec`)
-let cps = Cps::connect(None).await?;
+let cps = Cps::connect("wss://polkadot.rpc.robonomics.network").await?;
 ```
 
-Both modes expose the same API. `Cps::connect_rpc(url)` and `Cps::connect_light()` are available as explicit constructors.
+`Cps` is RPC-only: the endpoint can be a full node, a remote RPC service or a local light node.
+
+### Embedded light client
+
+With the `light-client` feature, `libcps::light::LightNode` runs a smoldot light client (Polkadot
+relay chain + Robonomics parachain, specs from `robonomics-chain-spec`) and serves it on a local
+WebSocket JSON-RPC endpoint, so applications do not need to know about smoldot:
+
+```rust
+use libcps::{light::{LightNode, LightNodeConfig}, Cps};
+
+let light = LightNode::start(LightNodeConfig::default().listen("127.0.0.1:0")).await?;
+light.wait_ready().await?; // rpc-ready -> syncing -> ready
+let cps = Cps::connect(light.rpc_url()).await?;
+// ... use `cps`, or any other Substrate RPC client on `light.rpc_url()` ...
+light.shutdown().await?;
+```
+
+- The endpoint binds to loopback by default (port `0` picks a free port) and has no authentication;
+  a non-loopback address needs `allow_non_loopback(true)`.
+- Every connected client has an isolated JSON-RPC session (request IDs, subscriptions).
+- The node is stateless: it keeps no database, so each start syncs from the chain spec checkpoints,
+  which takes a while (the relay chain is warp-synced from genesis).
+- Library users that only need RPC build with `default-features = false`; embedding the light
+  node needs `features = ["light-client"]`. The `cps` binary always includes it:
+  `cps light-client` (alias `cps lc`, `--listen 127.0.0.1:9944` by default) runs it in the foreground
+  until Ctrl-C.
 
 ### Reading and writing nodes
 
@@ -302,7 +324,7 @@ use libcps::{
 #[tokio::main]
 async fn main() -> libcps::Result<()> {
     let keypair = Signer::<Sr25519>::from_suri("//Alice")?;
-    let cps = Cps::connect(Some("ws://127.0.0.1:9944")).await?;
+    let cps = Cps::connect("ws://127.0.0.1:9944").await?;
 
     // Create a root node; its id is the result of the finalized transaction
     let tx = libcps::create_root(
@@ -477,7 +499,7 @@ Start with the step-by-step [quickstart tutorial](examples/README.md), which wal
 - `address_identity` - node identities and address-based access
 
 ```bash
-cargo run -p libcps --example light_client_read --no-default-features -- <ROOT_NODE_ID>
+cargo run -p libcps --example light_client_read --no-default-features --features light-client -- <ROOT_NODE_ID>
 cargo run -p libcps --example crypto_roundtrip --no-default-features
 cargo run -p libcps --example rpc_client_write --no-default-features
 ```
@@ -664,7 +686,8 @@ tools/libcps/
     ├── node/             # Node, NodeAt, watchers
     ├── address.rs        # Address, AddressAt
     ├── scope.rs          # Scope, ScopeAt
-    ├── backend/          # Private Subxt backend (RPC, light client, signer adapter)
+    ├── backend/          # Private Subxt backend (RPC connection)
+    ├── light/            # Optional LightNode: smoldot light client + local WebSocket RPC (feature `light-client`)
     ├── commands/         # CLI command implementations
     │   ├── mod.rs
     │   ├── show.rs

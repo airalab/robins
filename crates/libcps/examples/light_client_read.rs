@@ -17,21 +17,28 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! Read the production chain with the embedded light client.
 //!
-//! No RPC endpoint and no keys are needed: [`Cps::connect_light`] starts a
-//! light client for the Polkadot relay chain and the Robonomics parachain
-//! (chain specs are embedded in `robonomics-chain-spec`) and syncs over p2p.
-//! The first run may take a while until a finalized block is available.
+//! No RPC endpoint and no keys are needed: [`LightNode`] starts a light client
+//! for the Polkadot relay chain and the Robonomics parachain (chain specs are
+//! embedded in `robonomics-chain-spec`), syncs over p2p and serves a local
+//! JSON-RPC endpoint that the RPC-only [`Cps`] connects to. The light node is
+//! stateless, so every run syncs from scratch and may take a while until a
+//! finalized block is available.
 //!
 //! The example prints the whole CPS tree below a root node. All reads are pinned
 //! to one finalized block, so the printed tree is a consistent snapshot.
 //!
 //! ```text
-//! cargo run -p libcps --example light_client_read --no-default-features -- <ROOT_NODE_ID>
+//! cargo run -p libcps --example light_client_read --no-default-features \
+//!     --features light-client -- <ROOT_NODE_ID>
 //! # or
-//! CPS_ROOT_NODE=<ROOT_NODE_ID> cargo run -p libcps --example light_client_read --no-default-features
+//! CPS_ROOT_NODE=<ROOT_NODE_ID> cargo run -p libcps --example light_client_read --no-default-features \
+//!     --features light-client
 //! ```
 
-use libcps::{CpsAt, Error, NodeId};
+use libcps::{
+    light::{LightNode, LightNodeConfig},
+    Cps, CpsAt, Error, NodeId,
+};
 use std::{future::Future, pin::Pin};
 
 /// Longest value, in bytes, printed in full; longer values are cut.
@@ -91,11 +98,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("invalid root node id: {e}"))?;
 
     println!("Starting light client, waiting for the first finalized block...");
-    let cps = libcps::Cps::connect_light().await?;
+    let light = LightNode::start(LightNodeConfig::default()).await?;
+    light.wait_ready().await?;
+    let cps = Cps::connect(light.rpc_url()).await?;
 
     let at = cps.finalized().await?;
     println!("Synced, reading at finalized block {:?}\n", at.block_hash());
 
     print_tree(&at, NodeId::from(root), 0).await?;
+    light.shutdown().await?;
     Ok(())
 }

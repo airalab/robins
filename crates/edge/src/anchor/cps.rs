@@ -20,11 +20,15 @@
 use super::{AnchorError, Confirmation, CpsTarget};
 use async_trait::async_trait;
 use libcps::crypto::{Signer, Sr25519};
+use libcps::light::{LightError, LightNode, LightNodeConfig};
 use libcps::{Capability, Cps, Error as CpsError, NodeId};
 
 /// A CPS node reachable through `libcps`, with the account that signs for it.
 pub struct LibcpsTarget {
     cps: Cps,
+    /// Embedded light node serving `cps`; declared after it so the client is
+    /// dropped first.
+    _light: Option<LightNode>,
     signer: Signer<Sr25519>,
     node: NodeId,
 }
@@ -32,7 +36,8 @@ pub struct LibcpsTarget {
 impl LibcpsTarget {
     /// Connect to the chain and verify the account can write to `node`.
     ///
-    /// `endpoint = None` starts the embedded light client.
+    /// `endpoint = None` starts an embedded [`LightNode`] on a free loopback
+    /// port and connects to it; the node lives as long as the target.
     ///
     /// # Errors
     ///
@@ -45,7 +50,17 @@ impl LibcpsTarget {
     ) -> Result<Self, AnchorError> {
         let signer = Signer::<Sr25519>::from_suri(suri)
             .map_err(|e| AnchorError::Permanent(format!("invalid signing key: {e}")))?;
-        let cps = Cps::connect(endpoint).await.map_err(classify)?;
+        let (light, url) = match endpoint {
+            Some(url) => (None, url.to_string()),
+            None => {
+                let light = LightNode::start(LightNodeConfig::default())
+                    .await
+                    .map_err(classify_light)?;
+                let url = light.rpc_url().to_string();
+                (Some(light), url)
+            }
+        };
+        let cps = Cps::connect(&url).await.map_err(classify)?;
         let account = signer.account_id();
         let can_write = cps
             .node(node)
@@ -57,7 +72,12 @@ impl LibcpsTarget {
                 "account {account} has no write access to CPS node {node}"
             )));
         }
-        Ok(Self { cps, signer, node })
+        Ok(Self {
+            cps,
+            _light: light,
+            signer,
+            node,
+        })
     }
 }
 
@@ -81,6 +101,16 @@ impl CpsTarget for LibcpsTarget {
     }
 }
 
+/// Light node failures: configuration problems are permanent, the rest may pass.
+fn classify_light(error: LightError) -> AnchorError {
+    match error {
+        LightError::Config(_) | LightError::InvalidChainSpec(_) => {
+            AnchorError::Permanent(error.to_string())
+        }
+        other => AnchorError::Transient(other.to_string()),
+    }
+}
+
 /// Split `libcps` failures into retryable and permanent ones.
 ///
 /// A finalized dispatch failure ([`CpsError::Dispatch`]) is permanent: the
@@ -89,7 +119,6 @@ fn classify(error: CpsError) -> AnchorError {
     match error {
         CpsError::Connection(_)
         | CpsError::Rpc(_)
-        | CpsError::LightClient(_)
         | CpsError::Runtime(_)
         | CpsError::Transaction(_) => AnchorError::Transient(error.to_string()),
         other => AnchorError::Permanent(other.to_string()),

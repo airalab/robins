@@ -47,8 +47,8 @@
 //! # async fn run() -> libcps::Result<()> {
 //! let keypair = Signer::<Sr25519>::from_suri("//Alice")?;
 //!
-//! // `Some(url)` uses RPC, `None` starts the embedded light client.
-//! let cps = Cps::connect(Some("ws://127.0.0.1:9944")).await?;
+//! // Any JSON-RPC endpoint: a node, a remote service or a local `light::LightNode`.
+//! let cps = Cps::connect("ws://127.0.0.1:9944").await?;
 //!
 //! let node = cps.node(NodeId::from(42));
 //! let current = node.payload().await?;
@@ -178,7 +178,9 @@
 //!
 //! ## Feature flags
 //!
-//! - **`cli`** (default): builds the `cps` command-line binary.
+//! - **`light-client`**: the `libcps::light` module, an embedded smoldot light node that serves a
+//!   local JSON-RPC endpoint for [`Cps`]. Without it `libcps` does not depend on smoldot.
+//! - **`cli`** (default): builds the `cps` command-line binary; always includes `light-client`.
 //!
 //! ## Safety
 //!
@@ -192,6 +194,8 @@ mod backend;
 mod cps;
 pub mod crypto;
 mod error;
+#[cfg(feature = "light-client")]
+pub mod light;
 mod node;
 mod read;
 mod scope;

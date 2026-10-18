@@ -53,7 +53,8 @@ Feature dependencies:
 6. **`src/display/`**: Beautiful colored output formatting (CLI-only)
 3. **`src/cps.rs`, `src/transaction.rs`, `src/types.rs`, `src/error.rs`**: `Cps`/`CpsAt`, opaque `Transaction<T>`, value types and `Error` (library)
 8. **`src/node/`, `src/address.rs`, `src/scope.rs`, `src/read.rs`**: `Node`/`Address`/`Scope` handles (and pinned `*At` variants) over crate-private block reads (library)
-9. **`src/backend/`**: private Subxt backend: RPC and the embedded light client (library, crate-private)
+9. **`src/backend/`**: private Subxt backend: RPC connection (library, crate-private)
+9a. **`src/light/`**: optional (`light-client` feature) `LightNode`: smoldot light client behind a loopback WebSocket JSON-RPC proxy, one smoldot JSON-RPC session per connection; `status.rs` exposes sync state; stateless (no database)
 
 ### Adding a New Command
 
@@ -147,8 +148,9 @@ rust-gdb target/debug/cps
 
 ### Core Dependencies
 
-- `subxt`: Substrate RPC client and light client (private backend; never exposed in the public API)
-- `robonomics-chain-spec`: embedded Polkadot relay and Robonomics parachain specs for light-client mode
+- `subxt`: Substrate RPC client (private backend; never exposed in the public API)
+- `smoldot-light`, `tokio-tungstenite` (optional, `light-client`): the light node and its local RPC server
+- `robonomics-chain-spec`: embedded Polkadot relay and Robonomics parachain specs for the light node (`light-client` feature)
 - `clap`: Command-line argument parsing (CLI only)
 - `tokio`: Async runtime
 - `anyhow`: Error handling

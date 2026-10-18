@@ -37,8 +37,15 @@ tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1.40", features = ["full"] }
 env_logger = "0.11"
 meshtastic = { version = "0.1.9", features = ["serde", "tokio"] }
-subxt = { version = "0.51.1", features = ["light-client"] }
+subxt = "0.51.1"
 subxt-signer = "0.51.1"
+smoldot-light = { version = "3.0.0", default-features = false, features = [
+  "std",
+] }
+tokio-tungstenite = { version = "0.27", default-features = false, features = [
+  "handshake",
+] }
+futures-util = { version = "0.3", features = ["sink"] }
 curve25519-dalek = "5.0"
 x25519-dalek = { version = "3.0", features = ["static_secrets"] }
 chacha20poly1305 = "0.11"
@@ -86,4 +93,4 @@ libp2p = { version = "0.57.1", features = [
 ] }
 robonomics-chain-spec = "2.0.0"
 robonomics-runtime-subxt-api = "52.1.0"
-libcps = { version = "0.7.0", path = "./crates/libcps", default-features = false }
+libcps = { version = "0.8.0", path = "./crates/libcps", default-features = false }

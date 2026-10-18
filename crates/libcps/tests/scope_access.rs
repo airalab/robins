@@ -37,7 +37,7 @@ fn ws_url() -> String {
 }
 
 async fn connect() -> Cps {
-    Cps::connect(Some(&ws_url()))
+    Cps::connect(&ws_url())
         .await
         .expect("dev node is reachable")
 }

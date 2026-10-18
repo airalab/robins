@@ -150,6 +150,7 @@ use anyhow::{anyhow, Result};
 use libcps::crypto::{
     Cipher, EncryptedMessage, EncryptionAlgorithm, PublicKey, Scheme, Signer, Sr25519,
 };
+use libcps::light::{LightNode, LightNodeConfig};
 use libcps::{AccountId, Capability, Cps, NodeId};
 use parity_scale_codec::Decode;
 use parity_scale_codec::Encode;
@@ -200,8 +201,9 @@ fn is_false(b: &bool) -> bool {
 pub struct BlockchainConfig {
     /// WebSocket URL of the node RPC endpoint.
     ///
-    /// `None` starts the embedded light client instead of connecting to an RPC
-    /// node; the first queries then wait until the light client has synced.
+    /// `None` starts an embedded light node on a free local port instead of
+    /// connecting to an RPC node; the first queries then wait until the light
+    /// client has synced.
     pub ws_url: Option<String>,
     /// Account secret URI (e.g., //Alice or seed phrase)
     pub suri: Option<String>,
@@ -213,18 +215,46 @@ impl BlockchainConfig {
         self.ws_url.as_deref().unwrap_or("embedded light client")
     }
 
-    /// Connect to the chain over RPC, or through the light client when no
+    /// Connect to the chain over RPC, or through an embedded light node when no
     /// `ws_url` is configured.
-    async fn connect(&self) -> libcps::Result<Cps> {
-        Cps::connect(self.ws_url.as_deref()).await
+    async fn connect(&self) -> Result<ChainConnection> {
+        match self.ws_url.as_deref() {
+            Some(url) => Ok(ChainConnection {
+                cps: Cps::connect(url).await?,
+                _light: None,
+            }),
+            None => {
+                let light = LightNode::start(LightNodeConfig::default()).await?;
+                let cps = Cps::connect(light.rpc_url()).await?;
+                Ok(ChainConnection {
+                    cps,
+                    _light: Some(light),
+                })
+            }
+        }
+    }
+}
+
+/// Chain connection that keeps its embedded light node, if any, alive.
+struct ChainConnection {
+    cps: Cps,
+    /// Declared after `cps` so the client is dropped before the node serving it.
+    _light: Option<LightNode>,
+}
+
+impl std::ops::Deref for ChainConnection {
+    type Target = Cps;
+
+    fn deref(&self) -> &Cps {
+        &self.cps
     }
 }
 
 /// Blockchain connection configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockchainConfigData {
-    /// WebSocket URL for blockchain connection; omit it to use the embedded
-    /// light client
+    /// WebSocket URL for blockchain connection; omit it to use an embedded
+    /// light node
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ws_url: Option<String>,
     /// Account secret URI (e.g., //Alice or seed phrase)

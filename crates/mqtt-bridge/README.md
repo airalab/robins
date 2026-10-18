@@ -20,7 +20,7 @@ as a standalone CLI or as a library from your own Rust application.
   (no polling) and only publishes when the payload actually changes
 - **Access-aware**: the subscribe bridge checks that the signer has write access to the
   node before starting and reports revoked access or oversized payloads clearly
-- **RPC or light client**: connect to an RPC node, or run the embedded light client
+- **RPC or light client**: connect to an RPC node, or run an embedded light node
   (`--light-client`, or omit `ws_url` in the config file)
 - **Resilient**: auto-reconnects to both the broker and the blockchain on failure
 - **Developer-friendly CLI**: colored output with timestamps and block numbers
@@ -52,7 +52,7 @@ variables.
 | Flag                | Environment variable        | Default                  | Description                         |
 | ------------------- | --------------------------- | ------------------------ | ----------------------------------- |
 | `--ws-url`          | `ROBONOMICS_WS_URL`         | `ws://localhost:9944`    | Blockchain WebSocket URL            |
-| `--light-client`    | `ROBONOMICS_LIGHT_CLIENT`   | off                      | Use the embedded light client instead of `--ws-url` |
+| `--light-client`    | `ROBONOMICS_LIGHT_CLIENT`   | off                      | Use an embedded light node instead of `--ws-url` |
 | `--suri`            | `ROBONOMICS_SURI`           | —                        | Account secret URI (e.g. `//Alice`) |
 | `--log-level, -l`   | `RUST_LOG`                  | `warn`                   | Logging level                       |
 | `--mqtt-broker`     | `ROBONOMICS_MQTT_BROKER`    | `mqtt://localhost:1883`  | MQTT broker URL                     |
@@ -146,7 +146,7 @@ broker = "mqtt://localhost:1883"
 
 # Blockchain
 [blockchain]
-# Omit ws_url to use the embedded light client instead of an RPC node
+# Omit ws_url to use an embedded light node instead of an RPC node
 ws_url = "ws://localhost:9944"
 suri = "//Alice"
 
@@ -196,7 +196,7 @@ use mqtt_bridge as mqtt;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let blockchain_config = BlockchainConfig {
-        ws_url: Some("ws://localhost:9944".to_string()), // None = light client
+        ws_url: Some("ws://localhost:9944".to_string()), // None = embedded light node
         suri: Some("//Alice".to_string()),
     };
 
