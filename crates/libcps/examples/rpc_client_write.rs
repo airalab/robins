@@ -17,11 +17,13 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! Send transactions to a locally running testnet over RPC.
 //!
-//! Start a development node first (the `robonomics` binary is built from the
-//! `airalab/robonomics` repository; it is not part of this workspace):
+//! Start a development chain first. There is no standalone node binary: in a checkout
+//! of `airalab/robonomics`, run the helper that starts the runtime with
+//! `polkadot-omni-node` (see "Running a Development Chain" in its
+//! `DEVELOPER_GUIDE.md`):
 //!
 //! ```text
-//! robonomics --dev --tmp
+//! nix develop -c ./scripts/development-chain.sh run
 //! ```
 //!
 //! The development node pre-funds `//Alice`, which this example uses by default.
@@ -38,8 +40,7 @@
 
 use libcps::{
     crypto::{Signer, Sr25519},
-    prelude::*,
-    Client, CreateNode,
+    Cps, CreateNode, IdentityAssignment,
 };
 
 /// Text of a stored value, for printing.
@@ -55,49 +56,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let suri = std::env::var("ROBONOMICS_SURI").unwrap_or_else(|_| "//Alice".to_string());
 
     let signer = Signer::<Sr25519>::from_suri(&suri)?;
-    let client = Client::connect_rpc(&url).await?;
+    let cps = Cps::connect(&url).await?;
     println!("Connected to {url} as {}", signer.account_id());
 
-    // Creating a root node also creates a scope owned by the signer.
-    let root_tx = libcps::create_root(CreateNode {
-        meta: Some(br#"{"type":"building","name":"HQ"}"#.to_vec()),
-        payload: Some(br#"{"status":"online"}"#.to_vec()),
-    })?;
-    let receipt = client.submit_finalized(&root_tx, &signer).await?;
+    // Creating a root node also creates a scope owned by the signer. A root can
+    // only get the signer itself as identity, which makes it addressable by account.
+    let root_tx = libcps::create_root(
+        CreateNode::new()
+            .meta(br#"{"type":"building","name":"HQ"}"#)
+            .payload(br#"{"status":"online"}"#)
+            .identity(IdentityAssignment::new(signer.account_id())),
+    )?;
+    let receipt = cps.submit_finalized(&root_tx, &signer).await?;
     let root = receipt.result;
     println!("Created root node {root} in block {:?}", receipt.block_hash);
 
-    let child_tx = root.create_child(CreateNode {
-        meta: Some(br#"{"type":"room","name":"Server Room"}"#.to_vec()),
-        payload: Some(br#"{"temp":"22C"}"#.to_vec()),
-    })?;
-    let child = client.submit_finalized(&child_tx, &signer).await?.result;
+    let child_tx = cps.node(root).create_child(
+        CreateNode::new()
+            .meta(br#"{"type":"room","name":"Server Room"}"#)
+            .payload(br#"{"temp":"22C"}"#),
+    )?;
+    let child = cps.submit_finalized(&child_tx, &signer).await?.result;
     println!("Created child node {child} under {root}");
 
     // `submit` returns once the transaction is in the pool, so other work can
     // run before waiting for finality.
-    let pending = client
-        .submit(&child.set_payload(br#"{"temp":"24C"}"#)?, &signer)
+    let child_node = cps.node(child);
+    let pending = cps
+        .submit(&child_node.set_payload(br#"{"temp":"24C"}"#)?, &signer)
         .await?;
     println!("Submitted extrinsic {:?}", pending.extrinsic_hash());
     let receipt = pending.wait_finalized().await?;
     println!("Payload updated in block {:?}", receipt.block_hash);
 
-    client
-        .submit_finalized(
-            &child.set_meta(br#"{"type":"room","name":"Lab"}"#)?,
-            &signer,
-        )
-        .await?;
+    cps.submit_finalized(
+        &child_node.set_meta(br#"{"type":"room","name":"Lab"}"#)?,
+        &signer,
+    )
+    .await?;
 
     // Reads see the latest finalized block, which includes the updates above.
-    println!("child meta:    {}", text(child.meta(&client).await?));
-    println!("child payload: {}", text(child.payload(&client).await?));
-    println!("root children: {:?}", root.children(&client).await?);
+    // `CpsAt` pins all reads below to that one block.
+    let at = cps.finalized().await?;
+    println!("Reading at block {:?}", at.block_hash());
+    let child_state = at.node(child);
+    println!("child meta:    {}", text(child_state.meta().await?));
+    println!("child payload: {}", text(child_state.payload().await?));
+    println!("root children: {:?}", at.node(root).children().await?);
+
+    // The same root, addressed by its identity account instead of its node ID.
+    let by_account = at.address(signer.account_id());
+    println!(
+        "identity {} is node {:?}",
+        signer.account_id(),
+        by_account.node_id().await?
+    );
+    println!(
+        "root payload by account: {}",
+        text(by_account.payload().await?)
+    );
 
     // Children must be deleted before their parent.
-    client.submit_finalized(&child.delete(), &signer).await?;
-    client.submit_finalized(&root.delete(), &signer).await?;
+    cps.submit_finalized(&child_node.delete(), &signer).await?;
+    cps.submit_finalized(&cps.node(root).delete(), &signer)
+        .await?;
     println!("Deleted nodes {child} and {root}");
     Ok(())
 }

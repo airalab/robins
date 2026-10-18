@@ -26,19 +26,18 @@
 //! ```
 //!
 //! Effective permissions are always verified through
-//! `NodeAccess::has_capability` (the CPS view function), never by reading
+//! `Node::has_capability` (the CPS view function), never by reading
 //! raw Access storage.
 
 use libcps::crypto::{Signer, Sr25519};
-use libcps::prelude::*;
-use libcps::{Access, Capability, Client, CreateNode, NodeId};
+use libcps::{Capability, Cps, CreateNode, Grant, NodeId};
 
 fn ws_url() -> String {
     std::env::var("LIBCPS_TEST_WS").unwrap_or_else(|_| "ws://127.0.0.1:9944".to_string())
 }
 
-async fn connect() -> Client {
-    Client::connect(Some(&ws_url()))
+async fn connect() -> Cps {
+    Cps::connect(&ws_url())
         .await
         .expect("dev node is reachable")
 }
@@ -47,70 +46,63 @@ fn keypair(suri: &str) -> Signer<Sr25519> {
     Signer::from_suri(suri).expect("valid SURI")
 }
 
-fn data(bytes: &str) -> Option<Vec<u8>> {
-    Some(bytes.as_bytes().to_vec())
-}
-
-async fn create(client: &Client, signer: &Signer<Sr25519>, parent: Option<NodeId>) -> NodeId {
-    let params = CreateNode::default();
+async fn create(cps: &Cps, signer: &Signer<Sr25519>, parent: Option<NodeId>) -> NodeId {
+    let params = CreateNode::new();
     let tx = match parent {
-        Some(parent) => parent.create_child(params),
+        Some(parent) => cps.node(parent).create_child(params),
         None => libcps::create_root(params),
     }
     .unwrap();
-    client.submit_finalized(&tx, signer).await.unwrap().result
+    cps.submit_finalized(&tx, signer).await.unwrap().result
 }
 
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn queries_root_child_and_nested_scope() {
-    let client = connect().await;
+    let cps = connect().await;
     let alice = keypair("//Alice");
     let alice_id = alice.account_id();
 
-    let root_tx = libcps::create_root(CreateNode {
-        meta: data("root"),
-        payload: data("p0"),
-    })
-    .unwrap();
-    let root = client
-        .submit_finalized(&root_tx, &alice)
-        .await
-        .unwrap()
-        .result;
-    let child = create(&client, &alice, Some(root)).await;
-    let nested = create(&client, &alice, Some(child)).await;
+    let root_tx = libcps::create_root(CreateNode::new().meta(b"root").payload(b"p0")).unwrap();
+    let root = cps.submit_finalized(&root_tx, &alice).await.unwrap().result;
+    let child = create(&cps, &alice, Some(root)).await;
+    let nested = create(&cps, &alice, Some(child)).await;
 
-    let root_info = root.info(&client).await.unwrap().unwrap();
+    let root_info = cps.node(root).info().await.unwrap().unwrap();
     assert_eq!(root_info.parent, None);
-    assert_eq!(root.children(&client).await.unwrap(), vec![child]);
-    assert_eq!(root.payload(&client).await.unwrap().unwrap(), b"p0");
-    assert_eq!(root.meta(&client).await.unwrap().unwrap(), b"root");
+    assert_eq!(cps.node(root).children().await.unwrap(), vec![child]);
+    assert_eq!(cps.node(root).payload().await.unwrap().unwrap(), b"p0");
+    assert_eq!(cps.node(root).meta().await.unwrap().unwrap(), b"root");
 
-    let root_scope = root.resolve_scope(&client).await.unwrap();
+    let root_scope = cps.node(root).resolve_scope().await.unwrap();
     assert_eq!(root_scope.root, root);
     assert_eq!(root_scope.owner, alice_id);
     assert_eq!(root_info.scope, Some(root_scope.id));
     assert_eq!(
-        root_scope.id.info(&client).await.unwrap().unwrap().owner,
+        cps.scope(root_scope.id)
+            .info()
+            .await
+            .unwrap()
+            .unwrap()
+            .owner,
         alice_id
     );
 
-    let child_info = child.info(&client).await.unwrap().unwrap();
+    let child_info = cps.node(child).info().await.unwrap().unwrap();
     assert_eq!(child_info.parent, Some(root));
     assert_eq!(
-        child.resolve_scope(&client).await.unwrap().id,
+        cps.node(child).resolve_scope().await.unwrap().id,
         root_scope.id
     );
-    assert!(child.payload(&client).await.unwrap().is_none());
+    assert!(cps.node(child).payload().await.unwrap().is_none());
 
     // A nested Scope makes the node its own Scope root.
-    let scope_id = client
-        .submit_finalized(&nested.create_scope(), &alice)
+    let scope_id = cps
+        .submit_finalized(&cps.node(nested).create_scope(), &alice)
         .await
         .unwrap()
         .result;
-    let nested_scope = nested.resolve_scope(&client).await.unwrap();
+    let nested_scope = cps.node(nested).resolve_scope().await.unwrap();
     assert_eq!(nested_scope.id, scope_id);
     assert_eq!(nested_scope.root, nested);
     assert_ne!(nested_scope.id, root_scope.id);
@@ -120,19 +112,19 @@ async fn queries_root_child_and_nested_scope() {
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn missing_node_is_reported() {
-    let client = connect().await;
+    let cps = connect().await;
     let missing = NodeId::from(u64::MAX);
 
-    assert!(missing.info(&client).await.unwrap().is_none());
-    assert!(missing.payload(&client).await.unwrap().is_none());
-    assert!(missing.children(&client).await.unwrap().is_empty());
+    assert!(cps.node(missing).info().await.unwrap().is_none());
+    assert!(cps.node(missing).payload().await.unwrap().is_none());
+    assert!(cps.node(missing).children().await.unwrap().is_empty());
     assert!(matches!(
-        missing.resolve_scope(&client).await,
+        cps.node(missing).resolve_scope().await,
         Err(libcps::Error::NodeNotFound(id)) if id == missing
     ));
     assert!(matches!(
-        missing
-            .has_capability(&client, &keypair("//Alice").account_id(), Capability::Write)
+        cps.node(missing)
+            .has_capability(&keypair("//Alice").account_id(), Capability::Write)
             .await,
         Err(libcps::Error::NodeNotFound(id)) if id == missing
     ));
@@ -141,73 +133,75 @@ async fn missing_node_is_reported() {
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn set_and_clear_data() {
-    let client = connect().await;
+    let cps = connect().await;
     let alice = keypair("//Alice");
-    let node = create(&client, &alice, None).await;
+    let node = create(&cps, &alice, None).await;
 
-    let receipt = client
-        .submit_finalized(&node.set_payload(b"new").unwrap(), &alice)
+    let receipt = cps
+        .submit_finalized(&cps.node(node).set_payload(b"new").unwrap(), &alice)
         .await
         .unwrap();
     assert_ne!(receipt.block_hash, Default::default());
-    assert_eq!(node.payload(&client).await.unwrap().unwrap(), b"new");
+    assert_eq!(cps.node(node).payload().await.unwrap().unwrap(), b"new");
 
-    client
-        .submit_finalized(&node.clear_payload(), &alice)
+    cps.submit_finalized(&cps.node(node).clear_payload(), &alice)
         .await
         .unwrap();
-    assert!(node.payload(&client).await.unwrap().is_none());
+    assert!(cps.node(node).payload().await.unwrap().is_none());
 }
 
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn historical_reads_are_block_consistent() {
-    let client = connect().await;
+    let cps = connect().await;
     let alice = keypair("//Alice");
     let alice_id = alice.account_id();
-    let node = create(&client, &alice, None).await;
+    let node = create(&cps, &alice, None).await;
 
-    let first = client
-        .submit_finalized(&node.set_payload(b"one").unwrap(), &alice)
+    let first = cps
+        .submit_finalized(&cps.node(node).set_payload(b"one").unwrap(), &alice)
         .await
         .unwrap()
         .block_hash;
-    client
-        .submit_finalized(&node.set_payload(b"two").unwrap(), &alice)
+    cps.submit_finalized(&cps.node(node).set_payload(b"two").unwrap(), &alice)
         .await
         .unwrap();
 
-    assert_eq!(
-        node.payload_at(&client, first).await.unwrap().unwrap(),
-        b"one"
-    );
-    assert_eq!(node.payload(&client).await.unwrap().unwrap(), b"two");
-    assert!(node.info_at(&client, first).await.unwrap().is_some());
-    assert!(node.children_at(&client, first).await.unwrap().is_empty());
+    // Every read through one `CpsAt` uses the same block.
+    let at = cps.at(first).await.unwrap();
+    assert_eq!(at.block_hash(), first);
+    let pinned = at.node(node);
+    assert_eq!(pinned.payload().await.unwrap().unwrap(), b"one");
+    assert!(pinned.info().await.unwrap().is_some());
+    assert!(pinned.children().await.unwrap().is_empty());
 
-    let scope = node.resolve_scope_at(&client, first).await.unwrap();
+    let scope = pinned.resolve_scope().await.unwrap();
     assert_eq!(scope.root, node);
     assert_eq!(scope.owner, alice_id);
-    assert!(scope.id.info_at(&client, first).await.unwrap().is_some());
-    assert!(node
-        .has_capability_at(&client, &alice_id, Capability::Write, first)
+    assert!(at.scope(scope.id).info().await.unwrap().is_some());
+    assert!(pinned
+        .has_capability(&alice_id, Capability::Write)
         .await
         .unwrap());
+
+    // The latest finalized block already has the second payload.
+    let latest = cps.finalized().await.unwrap();
+    assert_eq!(latest.node(node).payload().await.unwrap().unwrap(), b"two");
+    assert_eq!(cps.node(node).payload().await.unwrap().unwrap(), b"two");
 }
 
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn scope_replacement_yields_fresh_scope_id() {
-    let client = connect().await;
+    let cps = connect().await;
     let alice = keypair("//Alice");
-    let node = create(&client, &alice, None).await;
+    let node = create(&cps, &alice, None).await;
 
-    let first = node.resolve_scope(&client).await.unwrap();
-    client
-        .submit_finalized(&node.create_scope(), &alice)
+    let first = cps.node(node).resolve_scope().await.unwrap();
+    cps.submit_finalized(&cps.node(node).replace_scope(), &alice)
         .await
         .unwrap();
-    let second = node.resolve_scope(&client).await.unwrap();
+    let second = cps.node(node).resolve_scope().await.unwrap();
 
     assert_eq!(second.root, first.root);
     assert_ne!(second.id, first.id);
@@ -216,49 +210,61 @@ async fn scope_replacement_yields_fresh_scope_id() {
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn grants_in_node_and_subtree_modes_and_revoke() {
-    let client = connect().await;
+    let cps = connect().await;
     let alice = keypair("//Alice");
     let bob = keypair("//Bob").account_id();
 
-    let root = create(&client, &alice, None).await;
-    let child = create(&client, &alice, Some(root)).await;
+    let root = create(&cps, &alice, None).await;
+    let child = create(&cps, &alice, Some(root)).await;
     let can = |node: NodeId, capability| {
-        let client = &client;
-        async move { node.has_capability(client, &bob, capability).await.unwrap() }
+        let cps = &cps;
+        async move {
+            cps.node(node)
+                .has_capability(&bob, capability)
+                .await
+                .unwrap()
+        }
     };
 
     assert!(!can(root, Capability::Write).await);
 
     // Node mode covers only the granted node.
-    client
-        .submit_finalized(&root.grant(bob, Access::write_node()).unwrap(), &alice)
-        .await
-        .unwrap();
+    cps.submit_finalized(
+        &cps.node(root).grant(bob, Grant::write_node()).unwrap(),
+        &alice,
+    )
+    .await
+    .unwrap();
     assert!(can(root, Capability::Write).await);
     assert!(!can(child, Capability::Write).await);
 
     // Subtree mode also covers descendants in the same Scope.
-    client
-        .submit_finalized(&root.grant(bob, Access::write_subtree()).unwrap(), &alice)
-        .await
-        .unwrap();
+    cps.submit_finalized(
+        &cps.node(root).grant(bob, Grant::write_subtree()).unwrap(),
+        &alice,
+    )
+    .await
+    .unwrap();
     assert!(can(child, Capability::Write).await);
 
     // Capabilities are independent.
     assert!(!can(root, Capability::CreateScope).await);
-    client
-        .submit_finalized(
-            &root.grant(bob, Access::create_scope_node()).unwrap(),
-            &alice,
-        )
-        .await
-        .unwrap();
+    cps.submit_finalized(
+        &cps.node(root)
+            .grant(bob, Grant::create_scope_node())
+            .unwrap(),
+        &alice,
+    )
+    .await
+    .unwrap();
     assert!(can(root, Capability::CreateScope).await);
 
-    client
-        .submit_finalized(&root.revoke(bob, Capability::Write).unwrap(), &alice)
-        .await
-        .unwrap();
+    cps.submit_finalized(
+        &cps.node(root).revoke(bob, Capability::Write).unwrap(),
+        &alice,
+    )
+    .await
+    .unwrap();
     assert!(!can(root, Capability::Write).await);
     assert!(!can(child, Capability::Write).await);
     assert!(can(root, Capability::CreateScope).await);
@@ -267,27 +273,29 @@ async fn grants_in_node_and_subtree_modes_and_revoke() {
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn subtree_grant_stops_at_nested_scope_boundary() {
-    let client = connect().await;
+    let cps = connect().await;
     let alice = keypair("//Alice");
     let bob = keypair("//Bob").account_id();
 
-    let root = create(&client, &alice, None).await;
-    let nested = create(&client, &alice, Some(root)).await;
-    let below = create(&client, &alice, Some(nested)).await;
-    client
-        .submit_finalized(&nested.create_scope(), &alice)
+    let root = create(&cps, &alice, None).await;
+    let nested = create(&cps, &alice, Some(root)).await;
+    let below = create(&cps, &alice, Some(nested)).await;
+    cps.submit_finalized(&cps.node(nested).create_scope(), &alice)
         .await
         .unwrap();
 
-    client
-        .submit_finalized(&root.grant(bob, Access::write_subtree()).unwrap(), &alice)
-        .await
-        .unwrap();
+    cps.submit_finalized(
+        &cps.node(root).grant(bob, Grant::write_subtree()).unwrap(),
+        &alice,
+    )
+    .await
+    .unwrap();
 
     let can = |node: NodeId| {
-        let client = &client;
+        let cps = &cps;
         async move {
-            node.has_capability(client, &bob, Capability::Write)
+            cps.node(node)
+                .has_capability(&bob, Capability::Write)
                 .await
                 .unwrap()
         }
@@ -300,13 +308,13 @@ async fn subtree_grant_stops_at_nested_scope_boundary() {
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn unauthorized_write_is_denied() {
-    let client = connect().await;
+    let cps = connect().await;
     let alice = keypair("//Alice");
     let bob = keypair("//Bob");
-    let node = create(&client, &alice, None).await;
+    let node = create(&cps, &alice, None).await;
 
-    let err = client
-        .submit_finalized(&node.set_payload(b"x").unwrap(), &bob)
+    let err = cps
+        .submit_finalized(&cps.node(node).set_payload(b"x").unwrap(), &bob)
         .await
         .unwrap_err();
     assert!(matches!(err, libcps::Error::AccessDenied), "{err:?}");
@@ -315,27 +323,46 @@ async fn unauthorized_write_is_denied() {
 #[tokio::test]
 #[ignore = "requires a live dev node"]
 async fn deletes_leaf_ordinary_node_and_leaf_scope_root() {
-    let client = connect().await;
+    let cps = connect().await;
     let alice = keypair("//Alice");
 
-    let root = create(&client, &alice, None).await;
-    let ordinary = create(&client, &alice, Some(root)).await;
-    let scoped = create(&client, &alice, Some(root)).await;
-    client
-        .submit_finalized(&scoped.create_scope(), &alice)
+    let root = create(&cps, &alice, None).await;
+    let ordinary = create(&cps, &alice, Some(root)).await;
+    let scoped = create(&cps, &alice, Some(root)).await;
+    cps.submit_finalized(&cps.node(scoped).create_scope(), &alice)
         .await
         .unwrap();
 
-    client
-        .submit_finalized(&ordinary.delete(), &alice)
+    cps.submit_finalized(&cps.node(ordinary).delete(), &alice)
         .await
         .unwrap();
-    client
-        .submit_finalized(&scoped.delete(), &alice)
+    cps.submit_finalized(&cps.node(scoped).delete(), &alice)
         .await
         .unwrap();
 
-    assert!(ordinary.info(&client).await.unwrap().is_none());
-    assert!(scoped.info(&client).await.unwrap().is_none());
-    assert!(root.children(&client).await.unwrap().is_empty());
+    assert!(cps.node(ordinary).info().await.unwrap().is_none());
+    assert!(cps.node(scoped).info().await.unwrap().is_none());
+    assert!(cps.node(root).children().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "requires a live dev node"]
+async fn create_scope_refuses_existing_scope_root() {
+    let cps = connect().await;
+    let alice = keypair("//Alice");
+    let root = create(&cps, &alice, None).await;
+    let before = cps.node(root).resolve_scope().await.unwrap();
+
+    let err = cps
+        .submit_finalized(&cps.node(root).create_scope(), &alice)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, libcps::Error::ScopeAlreadyExists(id) if id == root));
+    assert_eq!(cps.node(root).resolve_scope().await.unwrap().id, before.id);
+
+    // A node that is not a scope root can still get one.
+    let child = create(&cps, &alice, Some(root)).await;
+    cps.submit_finalized(&cps.node(child).create_scope(), &alice)
+        .await
+        .unwrap();
 }

@@ -121,9 +121,10 @@ fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
 ╚══════════════════════════════════════════════════════╝
 "#)]
 struct Cli {
-    /// WebSocket URL of a node RPC endpoint; an embedded light client is used when omitted
-    #[arg(long, env = "ROBONOMICS_WS_URL")]
-    ws_url: Option<String>,
+    /// WebSocket URL of a node RPC endpoint. Run `cps light-client` (`cps lc`) for a
+    /// local light client endpoint when no full node is available
+    #[arg(long, env = "ROBONOMICS_WS_URL", default_value = "ws://127.0.0.1:9944")]
+    ws_url: String,
 
     /// Account secret URI (e.g., //Alice, //Bob, or seed phrase). Signs transactions
     /// (SR25519) and is the key for encryption and decryption
@@ -307,6 +308,35 @@ EXAMPLES:
         #[arg(short = 'f', long)]
         force: bool,
     },
+
+    /// Run the embedded light client as a local JSON-RPC endpoint
+    #[command(
+        visible_alias = "lc",
+        long_about = "Run the embedded smoldot light client in the foreground and serve a local
+WebSocket JSON-RPC endpoint that other cps commands (and any Substrate RPC
+client) can connect to. Stop it with Ctrl-C.
+
+The light client keeps no state: every start synchronizes from scratch.
+
+EXAMPLES:
+    # Listen on 127.0.0.1:9944 (the default endpoint of other commands)
+    cps lc
+
+    # Listen on another port
+    cps lc --listen 127.0.0.1:9955
+
+    # Use it from another terminal
+    cps --ws-url ws://127.0.0.1:9955 show 0"
+    )]
+    LightClient {
+        /// Address of the local RPC endpoint
+        #[arg(long, default_value = commands::light_client::DEFAULT_LISTEN)]
+        listen: String,
+
+        /// Allow a non-loopback listen address. The endpoint has no authentication
+        #[arg(long)]
+        allow_external: bool,
+    },
 }
 
 #[tokio::main]
@@ -429,6 +459,16 @@ async fn main() -> Result<()> {
         Commands::Remove { node_id, force } => {
             commands::remove::execute(&connection, node_id, force).await?;
         }
+        Commands::LightClient {
+            listen,
+            allow_external,
+        } => {
+            commands::light_client::execute(commands::light_client::node_config(
+                &listen,
+                allow_external,
+            ))
+            .await?;
+        }
     }
 
     Ok(())
@@ -458,4 +498,42 @@ fn parse_algorithm(encrypting: bool, name: &str) -> Result<Option<EncryptionAlgo
     EncryptionAlgorithm::from_str(name)
         .map(Some)
         .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(std::iter::once("cps").chain(args.iter().copied())).unwrap()
+    }
+
+    #[test]
+    fn light_client_command_and_alias_use_the_default_listener() {
+        for name in ["light-client", "lc"] {
+            match parse(&[name]).command {
+                Commands::LightClient {
+                    listen,
+                    allow_external,
+                } => {
+                    assert_eq!(listen, "127.0.0.1:9944");
+                    assert!(!allow_external);
+                }
+                _ => panic!("`cps {name}` is not the light client command"),
+            }
+        }
+    }
+
+    #[test]
+    fn light_client_listen_is_configurable() {
+        match parse(&["lc", "--listen", "127.0.0.1:9955"]).command {
+            Commands::LightClient { listen, .. } => assert_eq!(listen, "127.0.0.1:9955"),
+            _ => panic!("not the light client command"),
+        }
+    }
+
+    #[test]
+    fn ws_url_defaults_to_the_light_client_endpoint() {
+        assert_eq!(parse(&["show", "0"]).ws_url, "ws://127.0.0.1:9944");
+    }
 }

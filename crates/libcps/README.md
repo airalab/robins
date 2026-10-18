@@ -20,7 +20,7 @@ A command-line interface for quick access to CPS pallet functionality.
 - ⚙️ **Flexible configuration** via environment variables or CLI args
 - 🔒 **Secure by design** with proper key management and ECDH key agreement
 - 📚 **Comprehensive documentation** for library API
-- 🔧 **Type-safe CPS 1.0 API**: `NodeId`/`ScopeId` extension traits, opaque `Transaction<T>`, RPC or embedded light client
+- 🔧 **Type-safe CPS 1.1 API**: single `Cps` entry point, `Node`/`Address` handles, block-pinned reads, node identities, opaque `Transaction<T>`, RPC-only `Cps`, plus an optional embedded smoldot light node (`libcps::light`, feature `light-client`)
 - 🎛️ **Feature flags** for flexible dependency management
 
 ## 🏗️ Architecture
@@ -35,10 +35,10 @@ A command-line interface for quick access to CPS pallet functionality.
 ┌────────────────────────────────────────────────────┐
 │                 libcps Library                     │
 ├──────────────┬──────────────┬──────────────────────┤
-│   Client     │ Node/Scope   │  Crypto              │
-│   - RPC      │ traits       │  - Keypair           │
-│   - light    │ - NodeId     │  - Cipher            │
-│              │ - ScopeId    │                      │
+│   Cps        │ Handles      │  Crypto              │
+│   - RPC      │ - Node       │  - Keypair           │
+│   - light    │ - Address    │  - Cipher            │
+│              │ - CpsAt      │                      │
 └──────────────┴──────────────┴──────────────────────┘
       ↓
 ┌─────────────────────┐
@@ -55,7 +55,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-libcps = "0.7.0"
+libcps = "0.8.0"
 ```
 
 #### Feature Flags
@@ -67,11 +67,11 @@ The library supports optional feature flags for flexible dependency management:
 ```toml
 # Default: CLI feature enabled
 [dependencies]
-libcps = "0.7.0"
+libcps = "0.8.0"
 
 # Library only, without CLI dependencies
 [dependencies]
-libcps = { version = "0.7.0", default-features = false }
+libcps = { version = "0.8.0", default-features = false }
 ```
 
 ### CLI Tool from Crates.io
@@ -113,7 +113,8 @@ sudo cp target/release/cps /usr/local/bin/
 ### 1. Set up your environment
 
 ```bash
-# Set blockchain endpoint (optional: without it the embedded light client is used)
+# Set blockchain endpoint (default ws://127.0.0.1:9944). Without a local full node,
+# run `cps lc` in another terminal: it serves the embedded light client on that address.
 export ROBONOMICS_WS_URL=ws://localhost:9944
 
 # Set your account (development account for testing)
@@ -240,7 +241,7 @@ cps remove 5 --force
 ### Environment Variables
 
 ```bash
-# Blockchain connection (omit to start the embedded light client)
+# Blockchain connection (default ws://127.0.0.1:9944, e.g. `cps lc`)
 export ROBONOMICS_WS_URL=ws://localhost:9944
 
 # Account credentials
@@ -262,125 +263,211 @@ cps --ws-url ws://localhost:9944 \
 ### Model
 
 ```
-NodeId  + extension traits   node topology, data, scope and access
-ScopeId + extension traits   scope queries
-Client                       connection, queries, transaction submission
-Transaction<T>               opaque prepared CPS transaction
-crypto::Signer<S>            identity tagged by scheme (Sr25519 | Ed25519): signs and encrypts
+Cps                    connection, handles, transaction submission
+  node(NodeId)         Node     canonical structural interface
+  address(AccountId)   Address  identity-account projection of the same tree
+  scope(ScopeId)       Scope    scope record
+  finalized() / at()   CpsAt    all reads pinned to one block (NodeAt, AddressAt, ScopeAt)
+  submit(tx, signer)   submit a Transaction<T>
+Transaction<T>         opaque prepared CPS transaction
+crypto::Signer<S>      identity tagged by scheme (Sr25519 | Ed25519): signs and encrypts
 ```
 
-`NodeId` and `ScopeId` are plain values: they never hold a client, signer or cached state. **Reads** take a `&Client` and run immediately (`async`). **Mutations** only build a `Transaction<T>` (synchronous) and submit nothing; submission is an explicit `Client` call. Subxt is an internal detail: no `subxt` or `subxt-signer` import is needed.
+`Cps` is the single entry point; `NodeId`, `ScopeId` and `AccountId` are plain values. **Reads** on handles run immediately (`async`) against the latest finalized block. **Mutations** only build a `Transaction<T>` (synchronous) and submit nothing; submission is an explicit `Cps::submit` call with a signer, which `Cps` never stores. Subxt is an internal detail: no `subxt` or `subxt-signer` import is needed.
 
-Import the extension traits with `use libcps::prelude::*;`.
+There is one CPS tree with two ways to address it. `NodeId` is the canonical structural identifier; an `AccountId` is an identity/address projection. Each handle returns values in its own address space, and conversion is explicit and fallible (there is no `From<AccountId> for NodeId`).
 
 ### Connecting
 
 ```rust
-use libcps::Client;
+use libcps::Cps;
 
-// Direct RPC connection
-let client = Client::connect(Some("wss://polkadot.rpc.robonomics.network")).await?;
-
-// No URL: start the embedded light client (Polkadot relay chain + Robonomics
-// parachain specs from `robonomics-chain-spec`)
-let client = Client::connect(None).await?;
+let cps = Cps::connect("wss://polkadot.rpc.robonomics.network").await?;
 ```
 
-Both modes expose the same API. `Client::connect_rpc(url)` and `Client::connect_light()` are available as explicit constructors.
+`Cps` is RPC-only: the endpoint can be a full node, a remote RPC service or a local light node.
+
+### Embedded light client
+
+With the `light-client` feature, `libcps::light::LightNode` runs a smoldot light client (Polkadot
+relay chain + Robonomics parachain, specs from `robonomics-chain-spec`) and serves it on a local
+WebSocket JSON-RPC endpoint, so applications do not need to know about smoldot:
+
+```rust
+use libcps::{light::{LightNode, LightNodeConfig}, Cps};
+
+let light = LightNode::start(LightNodeConfig::default().listen("127.0.0.1:0")).await?;
+light.wait_ready().await?; // rpc-ready -> syncing -> ready
+let cps = Cps::connect(light.rpc_url()).await?;
+// ... use `cps`, or any other Substrate RPC client on `light.rpc_url()` ...
+light.shutdown().await?;
+```
+
+- The endpoint binds to loopback by default (port `0` picks a free port) and has no authentication;
+  a non-loopback address needs `allow_non_loopback(true)`.
+- Every connected client has an isolated JSON-RPC session (request IDs, subscriptions).
+- The node is stateless: it keeps no database, so each start syncs from the chain spec checkpoints,
+  which takes a while (the relay chain is warp-synced from genesis).
+- Library users that only need RPC build with `default-features = false`; embedding the light
+  node needs `features = ["light-client"]`. The `cps` binary always includes it:
+  `cps light-client` (alias `cps lc`, `--listen 127.0.0.1:9944` by default) runs it in the foreground
+  until Ctrl-C.
 
 ### Reading and writing nodes
 
 ```rust
 use libcps::{
     crypto::{Signer, Sr25519},
-    prelude::*,
-    Client, CreateNode, NodeId,
+    CreateNode, Cps, NodeId,
 };
 
 #[tokio::main]
 async fn main() -> libcps::Result<()> {
     let keypair = Signer::<Sr25519>::from_suri("//Alice")?;
-    let client = Client::connect(Some("ws://127.0.0.1:9944")).await?;
+    let cps = Cps::connect("ws://127.0.0.1:9944").await?;
 
     // Create a root node; its id is the result of the finalized transaction
-    let tx = libcps::create_root(CreateNode {
-        meta: Some(br#"{"type":"building","name":"HQ"}"#.to_vec()),
-        payload: Some(br#"{"status":"online"}"#.to_vec()),
-    })?;
-    let root: NodeId = client.submit_finalized(&tx, &keypair).await?.result;
+    let tx = libcps::create_root(
+        CreateNode::new()
+            .meta(br#"{"type":"building","name":"HQ"}"#)
+            .payload(br#"{"status":"online"}"#),
+    )?;
+    let root: NodeId = cps.submit_finalized(&tx, &keypair).await?.result;
 
     // Create a child node
-    let tx = root.create_child(CreateNode {
-        meta: Some(br#"{"type":"room"}"#.to_vec()),
-        payload: None,
-    })?;
-    let child = client.submit_finalized(&tx, &keypair).await?.result;
+    let tx = cps
+        .node(root)
+        .create_child(CreateNode::new().meta(br#"{"type":"room"}"#))?;
+    let child = cps.submit_finalized(&tx, &keypair).await?.result;
 
     // Update the payload: build, then submit
-    let tx = child.set_payload(br#"{"temp":"23.5C"}"#)?;
-    let receipt = client.submit_finalized(&tx, &keypair).await?;
+    let tx = cps.node(child).set_payload(br#"{"temp":"23.5C"}"#)?;
+    let receipt = cps.submit_finalized(&tx, &keypair).await?;
     println!("finalized in block {:?}", receipt.block_hash);
 
     // Reads
-    let payload = child.payload(&client).await?;
-    let children = root.children(&client).await?;
+    let payload = cps.node(child).payload().await?;
+    let children = cps.node(root).children().await?;
     println!("{payload:?}, root has {} children", children.len());
     Ok(())
 }
 ```
 
-| Trait | Methods |
+| Handle | Methods |
 | --- | --- |
-| `NodeRead` | `info`, `meta`, `payload`, `watch_meta`, `watch_payload` |
-| `NodeTree` | `children`, `create_child`, `delete` (and the free function `create_root`) |
-| `NodeWrite` | `set_meta`, `clear_meta`, `set_payload`, `clear_payload` |
-| `NodeScope` | `resolve_scope`, `create_scope` |
-| `NodeAccess` | `has_capability`, `grant`, `revoke` |
-| `ScopeRead` | `info` |
+| `Node` (reads) | `info`, `parent`, `children`, `meta`, `payload`, `identity`, `snapshot`, `resolve_scope`, `has_capability`, `watch_meta`, `watch_payload` |
+| `Node` (transactions) | `create_child`, `delete`, `set_meta`, `clear_meta`, `set_payload`, `clear_payload`, `create_scope`, `replace_scope`, `grant`, `revoke`, `set_identity`, `clear_identity` (and the free function `create_root`) |
+| `Address` (reads only) | `node_id`, `parent`, `children`, `meta`, `payload`, `scope_id`, `has_capability` |
+| `Scope` | `info` |
+| `CpsAt` | `block_hash`, `node`, `address`, `scope`; `NodeAt`, `AddressAt` and `ScopeAt` have the read methods of their handles |
 
-Metadata (1024 bytes) and payload (8192 bytes) are validated when the transaction is built; oversized values fail with `Error::MetaTooLarge` / `Error::PayloadTooLarge` before anything is sent.
+Metadata (1024 bytes) and payload (8192 bytes) are validated when the transaction is built; oversized values fail with `Error::MetaTooLarge` / `Error::PayloadTooLarge` before anything is sent. These limits mirror the runtime constants and are not read from the chain, so they must be updated together with the pallet.
 
-`Client::submit` signs and submits without waiting and returns a `PendingTransaction<T>` (`wait_finalized()` completes it); `Client::submit_finalized` waits for finalization and successful execution and returns a `TxReceipt<T>` with `extrinsic_hash`, `block_hash` and `result` (`NodeId` for node creation, `ScopeId` for scope creation, `()` otherwise).
+`Cps::submit` signs and submits without waiting and returns a `PendingTransaction<T>` (`wait_finalized()` completes it); `Cps::submit_finalized` waits for finalization and successful execution and returns a `TxReceipt<T>` with `extrinsic_hash`, `block_hash` and `result` (`NodeId` for node creation, `ScopeId` for scope creation, `()` otherwise).
+
+### Consistent reads at one block
+
+Every handle call reads the latest finalized block on its own. To read several values from the same block, pin a context:
+
+```rust
+let at = cps.finalized().await?;      // or `cps.at(block_hash).await?`
+let node = at.node(node_id);
+
+let info = node.info().await?;
+let payload = node.payload().await?;
+let scope = node.resolve_scope().await?;
+let device_payload = at.address(account_id).payload().await?;
+println!("all read at {:?}", at.block_hash());
+```
+
+`CpsAt` replaces the former `*_at(client, block_hash)` method variants.
+
+### Addressing by NodeId or by account (CPS 1.1 identities)
+
+A node can be bound to an identity account. The same tree can then be read through either interface:
+
+```rust
+// Structural: results are NodeIds
+let parent: Option<NodeId> = cps.node(node_id).parent().await?;
+let children: Vec<NodeId> = cps.node(node_id).children().await?;
+
+// Identity projection: results are AccountIds
+let device = cps.address(account_id);
+let parent: Option<AccountId> = device.parent().await?;
+let children: Vec<AccountId> = device.children().await?;
+let payload = device.payload().await?;
+
+// Explicit, fallible conversion
+let identity: Option<AccountId> = cps.node(node_id).identity().await?;
+let node_id: Option<NodeId> = cps.address(account_id).node_id().await?;
+```
+
+The address views are strict projections computed by the runtime: an account bound to no node fails with `Error::IdentityNotFound`, and a result that contains a node without identity (for example `children` of a node with one unidentified child) fails as a whole with `Error::MissingProjectedIdentity` instead of silently omitting it. `Address` is read-only; mutations go through `Node`.
+
+Identity is managed with explicit transactions:
+
+```rust
+use libcps::IdentityAssignment;
+
+// At creation. The signer's own account needs no permit; another account must
+// provide a permit it signed for the scope (only possible for child nodes).
+let tx = cps.node(parent).create_child(
+    CreateNode::new()
+        .meta(meta)
+        .identity(IdentityAssignment::with_permit(device_account, permit)),
+)?;
+let node_id = cps.submit_finalized(&tx, &owner).await?.result;
+
+// Replace or remove it later
+cps.submit_finalized(&cps.node(node_id).set_identity(assignment)?, &owner).await?;
+cps.submit_finalized(&cps.node(node_id).clear_identity(), &owner).await?;
+
+// Missing node vs. unset field
+match cps.node(node_id).snapshot().await? {
+    None => { /* the node does not exist */ }
+    Some(node) => { /* node.meta / node.payload / node.identity may each be None */ }
+}
+```
+
+`IdentityPermit { valid_until, signature }` is produced by the identity account over the permit payload defined by the runtime; `libcps` does not build it. Runtime rejections surface as `Error::Identity(IdentityError::..)` (`AlreadyInUse`, `NotSet`, `PermitRequired`, `PermitExpired`, `PermitTooLong`, `InvalidPermit`, `RootIdentityMustBeCaller`).
 
 ### Scopes and Access Control
 
 Ownership belongs to a *Scope*, not to a node. A Scope is rooted at a node and owned by one account; nodes without their own Scope resolve to the Scope of their nearest ancestor that has one.
 
-The library does not reimplement Scope resolution or authorization. It calls the CPS pallet view functions (`resolve_scope`, `has_capability`; runtime metadata V16) and leaves authorization of every mutation to the runtime, so a rejected transaction surfaces as an error (`Error::AccessDenied` for authorization failures).
+The library does not reimplement Scope resolution or authorization. It calls the CPS pallet view functions (`resolve_scope`, `has_capability`, identity and address views; runtime metadata V16) and leaves authorization of every mutation to the runtime, so a rejected transaction surfaces as an error (`Error::AccessDenied` for authorization failures).
 
 ```rust
-use libcps::{prelude::*, Access, Capability};
+use libcps::{Capability, Grant};
+
+let node = cps.node(node_id);
 
 // Scope of a node (a snapshot value) and the scope record
-let resolved = node.resolve_scope(&client).await?;
-let scope_info = resolved.id.info(&client).await?;
+let resolved = node.resolve_scope().await?;
+let scope_info = cps.scope(resolved.id).info().await?;
 
-// Make the node the root of a new nested Scope. On an existing Scope root
-// this replaces the Scope with a fresh ScopeId, which is how ownership changes.
-let scope_id = client
-    .submit_finalized(&node.create_scope(), &keypair)
-    .await?
-    .result;
+// Make the node the root of a new nested Scope. This refuses (Error::ScopeAlreadyExists)
+// a node that already roots a Scope.
+let scope_id = cps.submit_finalized(&node.create_scope(), &keypair).await?.result;
+
+// Replacing an existing Scope with a fresh ScopeId, which is how ownership
+// changes, must be explicit: it drops the Scope's access entries.
+let scope_id = cps.submit_finalized(&node.replace_scope(), &keypair).await?.result;
 
 // Let `bob` write to this node and its descendants in the same Scope
-client
-    .submit_finalized(&node.grant(bob, Access::write_subtree())?, &keypair)
-    .await?;
-assert!(node.has_capability(&client, &bob, Capability::Write).await?);
+cps.submit_finalized(&node.grant(bob, Grant::write_subtree())?, &keypair).await?;
+assert!(node.has_capability(&bob, Capability::Write).await?);
 
-client
-    .submit_finalized(&node.revoke(bob, Capability::Write)?, &keypair)
-    .await?;
+cps.submit_finalized(&node.revoke(bob, Capability::Write)?, &keypair).await?;
 ```
 
-- Reads use the latest finalized block. Every read has an `*_at(client, block_hash)` variant (`info_at`, `meta_at`, `payload_at`, `children_at`, `resolve_scope_at`, `has_capability_at`, `ScopeId::info_at`) that reads and calls the runtime at exactly that block.
 - `has_capability` fails with `Error::NodeNotFound` for a missing node.
-- `create_node` is always sent without a node identity; the identity interface is not part of this API yet.
+- The `create_scope` guard is checked against the finalized state when the transaction is submitted; it is a client-side safeguard, not an atomic runtime check.
 - Nodes cannot be moved, and a Scope is deleted only together with its root node.
 
 ### Signing and encryption
 
-A `crypto::Signer<S>` is the account identity, tagged with its scheme: `S` is `crypto::Sr25519` (default) or `crypto::Ed25519`. It signs transactions (`Client::submit` takes `&Signer<S>`; it implements the Subxt signer interface internally) and implements `Cipher` (built on `SharedSecret`) for encryption. The receiver's `crypto::PublicKey<S>` carries the same tag, so a key of another scheme cannot be mixed in; that is a compile error. The two purposes stay separate; transactions are signed only with the asymmetric signing key, never with ECDH/HKDF/AEAD output.
+A `crypto::Signer<S>` is the account identity, tagged with its scheme: `S` is `crypto::Sr25519` (default) or `crypto::Ed25519`. It signs transactions (`Cps::submit` takes `&Signer<S>`; it implements the Subxt signer interface internally) and implements `Cipher` (built on `SharedSecret`) for encryption. The receiver's `crypto::PublicKey<S>` carries the same tag, so a key of another scheme cannot be mixed in; that is a compile error. The two purposes stay separate; transactions are signed only with the asymmetric signing key, never with ECDH/HKDF/AEAD output.
 
 libcps has no runtime scheme selector. An application that picks the scheme at runtime (like the `cps` CLI with its `--scheme` flag) instantiates generic code per scheme itself, for example `fn run<S: Scheme>(..)` called once with `Sr25519` and once with `Ed25519`.
 
@@ -395,19 +482,25 @@ let signer = Signer::<Sr25519>::from_suri("//Alice")?;
 // Encrypt for a receiver and store the encrypted message as node payload
 let receiver_public = PublicKey::<Sr25519>::from(receiver_public_bytes);
 let message = signer.encrypt(b"secret", &receiver_public, EncryptionAlgorithm::XChaCha20Poly1305)?;
-let tx = node.set_payload(parity_scale_codec::Encode::encode(&message))?;
-client.submit_finalized(&tx, &signer).await?;
+let tx = cps.node(node_id).set_payload(parity_scale_codec::Encode::encode(&message))?;
+cps.submit_finalized(&tx, &signer).await?;
 ```
 
 ### Runnable examples
 
-See [`examples/`](examples/README.md):
+Start with the step-by-step [quickstart tutorial](examples/README.md), which walks through the examples from the simplest to the most advanced:
 
 - `light_client_read` - read the production chain (CPS tree walk) with the embedded light client
+- `offline_transactions` - build and validate transactions without a chain
 - `rpc_client_write` - send transactions to a local testnet over RPC
+- `crypto_roundtrip` - encrypt and decrypt data offline (both schemes, all algorithms)
+- `watch_payload` - follow payload changes with watchers
+- `scope_access` - scopes, grants and authorization
+- `address_identity` - node identities and address-based access
 
 ```bash
-cargo run -p libcps --example light_client_read --no-default-features -- <ROOT_NODE_ID>
+cargo run -p libcps --example light_client_read --no-default-features --features light-client -- <ROOT_NODE_ID>
+cargo run -p libcps --example crypto_roundtrip --no-default-features
 cargo run -p libcps --example rpc_client_write --no-default-features
 ```
 
@@ -585,14 +678,16 @@ tools/libcps/
 └── src/
     ├── lib.rs            # Library entry point with module exports
     ├── main.rs           # CLI entry point
-    ├── client.rs         # Client: RPC/light-client connection, submission
+    ├── cps.rs            # Cps, CpsAt: connection, pinned reads, submission
     ├── transaction.rs    # Opaque Transaction<T>, size validation
-    ├── types.rs          # NodeId, ScopeId, Access, ResolvedScope, ...
+    ├── types.rs          # NodeId, ScopeId, Grant, NodeSnapshot, IdentityAssignment, ...
     ├── error.rs          # libcps::Error
-    ├── prelude.rs        # Extension traits for `use libcps::prelude::*`
-    ├── node/             # NodeRead, NodeTree, NodeWrite, NodeScope, NodeAccess
-    ├── scope/            # ScopeRead
-    ├── backend/          # Private Subxt backend (RPC, light client, signer adapter)
+    ├── read.rs           # Crate-private reads at a fixed block (storage and view functions)
+    ├── node/             # Node, NodeAt, watchers
+    ├── address.rs        # Address, AddressAt
+    ├── scope.rs          # Scope, ScopeAt
+    ├── backend/          # Private Subxt backend (RPC connection)
+    ├── light/            # Optional LightNode: smoldot light client + local WebSocket RPC (feature `light-client`)
     ├── commands/         # CLI command implementations
     │   ├── mod.rs
     │   ├── show.rs

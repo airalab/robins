@@ -20,7 +20,8 @@
 //! These drive the real data path — an HTTP `POST` is validated, authorised,
 //! de-duplicated, and published over GossipSub to an independent verifier node —
 //! plus identity persistence across a restart. Only the HTTP → GossipSub path is
-//! covered here; durable storage and IPFS are deferred subsystems.
+//! covered here; durable batching/anchoring lives in `durable_anchoring.rs` and
+//! IPFS is a deferred subsystem.
 
 use std::sync::Arc;
 use std::time::Duration;

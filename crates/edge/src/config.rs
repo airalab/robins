@@ -19,15 +19,17 @@
 //!
 //! `edge gw` is configuration-first: the daemon is driven by a TOML file whose
 //! schema is defined here and mirrors the `edge` API specification. Sections for
-//! subsystems that land in later phases (`ipfs`, `blockchain`, `storage`) are
-//! modelled so that `edge config check` can validate a complete file, even
-//! though the MVP runtime only wires up `http`, `meshtastic`, `auth`,
-//! `pubsub` and `metrics`.
+//! subsystems that land in later phases (`ipfs`) are modelled so that
+//! `edge config check` can validate a complete file, even though the runtime
+//! only wires up `http`, `meshtastic`, `auth`, `pubsub`, `metrics` and, when
+//! `blockchain.enabled`, durable batching (`batcher`, `storage`) with CPS
+//! anchoring (`blockchain`).
 //!
 //! Secrets are never embedded directly: token/key material is referenced through
 //! `*_file` paths so it can be injected out-of-band and redacted by
 //! `edge config print`.
 
+use crate::batcher::BatcherConfig;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -49,9 +51,11 @@ pub struct Config {
     pub meshtastic: MeshtasticConfig,
     /// IPFS durable publishing (deferred subsystem).
     pub ipfs: IpfsConfig,
-    /// Robonomics anchoring (deferred subsystem).
+    /// Robonomics CPS anchoring of batches.
     pub blockchain: BlockchainConfig,
-    /// Embedded persistent storage (deferred subsystem).
+    /// Durable batching of accepted envelopes before anchoring.
+    pub batcher: BatcherConfig,
+    /// Embedded persistent storage backing the batching pipeline.
     pub storage: StorageConfig,
     /// Operations/metrics HTTP server.
     pub metrics: MetricsConfig,
@@ -230,19 +234,42 @@ pub struct KuboConfig {
     pub url: Option<String>,
 }
 
-/// Robonomics anchoring configuration (`[blockchain]`, deferred subsystem).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Robonomics CPS anchoring configuration (`[blockchain]`).
+///
+/// When enabled, accepted envelopes are durably batched (see `[batcher]`,
+/// persisted in `[storage].path`) and each batch is written to the CPS node
+/// with `set_payload`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BlockchainConfig {
     /// Whether blockchain anchoring is enabled.
     pub enabled: bool,
     /// Robonomics RPC endpoint (websocket).
     pub endpoint: Option<String>,
-    /// Path to a file containing the anchoring signing key.
+    /// Path to a file containing the anchoring account secret URI.
     pub key_file: Option<PathBuf>,
+    /// CPS node whose payload receives the batches. The account must have write access.
+    pub node_id: Option<u64>,
+    /// Delay before the first retry of a transient chain failure, in seconds.
+    pub retry_min_secs: u64,
+    /// Upper bound of the exponential retry back-off, in seconds.
+    pub retry_max_secs: u64,
 }
 
-/// Embedded persistent storage configuration (`[storage]`, deferred subsystem).
+impl Default for BlockchainConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: None,
+            key_file: None,
+            node_id: None,
+            retry_min_secs: 1,
+            retry_max_secs: 60,
+        }
+    }
+}
+
+/// Embedded persistent storage configuration (`[storage]`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StorageConfig {
@@ -427,10 +454,38 @@ impl Config {
             }
         }
 
-        if self.blockchain.enabled && self.blockchain.endpoint.is_none() {
-            return Err(ConfigError::Invalid(
-                "blockchain.enabled = true requires blockchain.endpoint".to_string(),
-            ));
+        self.batcher.validate().map_err(ConfigError::Invalid)?;
+
+        if self.blockchain.enabled {
+            if self.blockchain.endpoint.is_none() {
+                return Err(ConfigError::Invalid(
+                    "blockchain.enabled = true requires blockchain.endpoint".to_string(),
+                ));
+            }
+            if self.blockchain.key_file.is_none() {
+                return Err(ConfigError::Invalid(
+                    "blockchain.enabled = true requires blockchain.key_file".to_string(),
+                ));
+            }
+            if self.blockchain.node_id.is_none() {
+                return Err(ConfigError::Invalid(
+                    "blockchain.enabled = true requires blockchain.node_id".to_string(),
+                ));
+            }
+            if self.storage.path.is_none() {
+                return Err(ConfigError::Invalid(
+                    "blockchain.enabled = true requires storage.path (durable batching)"
+                        .to_string(),
+                ));
+            }
+            if self.blockchain.retry_min_secs == 0
+                || self.blockchain.retry_max_secs < self.blockchain.retry_min_secs
+            {
+                return Err(ConfigError::Invalid(
+                    "blockchain.retry_min_secs must be non-zero and <= blockchain.retry_max_secs"
+                        .to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -512,6 +567,79 @@ mod tests {
             },
             ..Default::default()
         };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn parses_batcher_section() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [batcher]
+            max_batch_age_secs = 10
+            max_batch_size = 4096
+            max_messages = 25
+            compression = "none"
+        "#,
+        )
+        .expect("parse");
+        cfg.validate().expect("valid");
+        assert_eq!(cfg.batcher.max_batch_age_secs, 10);
+        assert_eq!(cfg.batcher.max_batch_size, 4096);
+        assert_eq!(cfg.batcher.max_messages, 25);
+        assert_eq!(cfg.batcher.compression, crate::batcher::Compression::None);
+    }
+
+    #[test]
+    fn unknown_compression_is_rejected_at_parse_time() {
+        let err = toml::from_str::<Config>("[batcher]\ncompression = \"xz\"").unwrap_err();
+        assert!(err.to_string().contains("xz"));
+    }
+
+    #[test]
+    fn batch_size_above_cps_limit_is_rejected() {
+        let cfg: Config = toml::from_str("[batcher]\nmax_batch_size = 9000").unwrap();
+        assert!(cfg.validate().is_err());
+    }
+
+    fn anchoring() -> Config {
+        toml::from_str(
+            r#"
+            [blockchain]
+            enabled = true
+            endpoint = "ws://127.0.0.1:9944"
+            key_file = "/etc/edge/key"
+            node_id = 7
+
+            [storage]
+            path = "/var/lib/edge/batcher.redb"
+        "#,
+        )
+        .expect("parse")
+    }
+
+    #[test]
+    fn complete_anchoring_config_is_valid() {
+        let cfg = anchoring();
+        cfg.validate().expect("valid");
+        assert_eq!(cfg.blockchain.node_id, Some(7));
+    }
+
+    #[test]
+    fn anchoring_requires_key_node_and_storage() {
+        let mut cfg = anchoring();
+        cfg.blockchain.key_file = None;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = anchoring();
+        cfg.blockchain.node_id = None;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = anchoring();
+        cfg.storage.path = None;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = anchoring();
+        cfg.blockchain.retry_min_secs = 0;
         assert!(cfg.validate().is_err());
     }
 }

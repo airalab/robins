@@ -26,6 +26,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 bytes.workspace = true
 hex.workspace = true
@@ -43,11 +44,13 @@ clap = { workspace = true, optional = true }
 env_logger = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
-zstd = { workspace = true, optional = true }
-# Used by `edge message` to encrypt `private:` sections (ECDH + AEAD) via
-# `libcps::crypto::Cipher`. Only the `crypto` module is needed, so CLI/
-# blockchain features are disabled.
-libcps = { workspace = true, optional = true }
+# Batch payload compression (`[batcher] compression = "zstd"`) and `edge batch`.
+zstd.workspace = true
+# Embedded persistent store backing the durable batching pipeline.
+redb.workspace = true
+# CPS anchoring (`Client`, `NodeId::set_payload`/`set_meta`) and, for the CLI,
+# `libcps::crypto::Cipher` to encrypt `private:` sections (ECDH + AEAD).
+libcps = { workspace = true, features = ["light-client"] }
 
 # Connectivity Protocol runtime. The wire types are generated (and committed)
 # from the vendored `.proto` files under `src/protobufs/` with `prost-build` and
@@ -72,20 +75,14 @@ walkdir = { workspace = true, optional = true }
 [dev-dependencies]
 # Used by the black-box CLI integration tests
 # and by the observability tests to drive the ops router via `tower::oneshot`.
-serde_json.workspace = true
 tower.workspace = true
 hex.workspace = true
+# Temporary redb files for the durable batching tests.
+tempfile.workspace = true
 
 [features]
 default = ["cli"]
-cli = [
-  "dep:clap",
-  "dep:env_logger",
-  "dep:base64",
-  "dep:colored",
-  "dep:libcps",
-  "dep:zstd",
-]
+cli = ["dep:clap", "dep:env_logger", "dep:base64", "dep:colored"]
 # Developer-only: regenerate the committed Connectivity Protocol module from the
 # vendored `.proto` sources. Run `cargo build -p edge --features gen`.
 gen = ["dep:prost-build", "dep:protoc-bin-vendored", "dep:walkdir"]

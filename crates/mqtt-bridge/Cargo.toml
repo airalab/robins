@@ -22,7 +22,7 @@ required-features = ["cli"]
 
 [dependencies]
 # Core CPS library (blockchain, crypto, node)
-libcps.workspace = true
+libcps = { workspace = true, features = ["light-client"] }
 
 # Blockchain / encoding
 parity-scale-codec.workspace = true

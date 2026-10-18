@@ -51,9 +51,10 @@ Feature dependencies:
 4. **`src/commands/`**: Individual CLI command implementations (thin wrappers)
 5. **`src/crypto/`**: Encryption/decryption utilities (library)
 6. **`src/display/`**: Beautiful colored output formatting (CLI-only)
-3. **`src/client.rs`, `src/transaction.rs`, `src/types.rs`, `src/error.rs`**: `Client`, opaque `Transaction<T>`, value types and `Error` (library)
-8. **`src/node/`, `src/scope/`**: extension traits implemented for `NodeId` and `ScopeId` (library)
-9. **`src/backend/`**: private Subxt backend: RPC and the embedded light client (library, crate-private)
+3. **`src/cps.rs`, `src/transaction.rs`, `src/types.rs`, `src/error.rs`**: `Cps`/`CpsAt`, opaque `Transaction<T>`, value types and `Error` (library)
+8. **`src/node/`, `src/address.rs`, `src/scope.rs`, `src/read.rs`**: `Node`/`Address`/`Scope` handles (and pinned `*At` variants) over crate-private block reads (library)
+9. **`src/backend/`**: private Subxt backend: RPC connection (library, crate-private)
+9a. **`src/light/`**: optional (`light-client` feature) `LightNode`: smoldot light client behind a loopback WebSocket JSON-RPC proxy, one smoldot JSON-RPC session per connection; `status.rs` exposes sync state; stateless (no database)
 
 ### Adding a New Command
 
@@ -91,14 +92,14 @@ cargo test -p libcps --lib --no-default-features
 
 ### Integration Testing
 
-The Scope/Access tests in `tests/scope_access.rs` need a running dev node with CPS pallet 1.1 with the CPS view functions (Robonomics runtime v52, metadata V16). Start one from the `airalab/robonomics` repository with `nix develop -c ./scripts/development-chain.sh run`. They are `#[ignore]`d by default and read the node URL from `LIBCPS_TEST_WS` (default `ws://127.0.0.1:9944`); they sign with the `//Alice` and `//Bob` dev accounts:
+The Scope/Access tests in `tests/scope_access.rs` and `tests/identity_address.rs` need a running dev node with CPS pallet 1.1 with the CPS view functions (Robonomics runtime v52, metadata V16). Start one from the `airalab/robonomics` repository with `nix develop -c ./scripts/development-chain.sh run`. They are `#[ignore]`d by default and read the node URL from `LIBCPS_TEST_WS` (default `ws://127.0.0.1:9944`); they sign with the `//Alice` and `//Bob` dev accounts:
 
 ```bash
 LIBCPS_TEST_WS=ws://127.0.0.1:9944 \
-  cargo test -p libcps --test scope_access --no-default-features -- --ignored --test-threads=1
+  cargo test -p libcps --test scope_access --test identity_address --no-default-features -- --ignored --test-threads=1
 ```
 
-Effective permissions are verified through `NodeAccess::has_capability`, never by reading raw Access storage.
+Effective permissions are verified through `Node::has_capability`, never by reading raw Access storage.
 
 ## Code Quality
 
@@ -147,8 +148,9 @@ rust-gdb target/debug/cps
 
 ### Core Dependencies
 
-- `subxt`: Substrate RPC client and light client (private backend; never exposed in the public API)
-- `robonomics-chain-spec`: embedded Polkadot relay and Robonomics parachain specs for light-client mode
+- `subxt`: Substrate RPC client (private backend; never exposed in the public API)
+- `smoldot-light`, `tokio-tungstenite` (optional, `light-client`): the light node and its local RPC server
+- `robonomics-chain-spec`: embedded Polkadot relay and Robonomics parachain specs for the light node (`light-client` feature)
 - `clap`: Command-line argument parsing (CLI only)
 - `tokio`: Async runtime
 - `anyhow`: Error handling
