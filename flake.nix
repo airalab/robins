@@ -18,7 +18,7 @@
     systems.url = "github:nix-systems/default";
     nixpkgs.url = "github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30";
 
-    fenix.url = "github:nix-community/fenix";
+    fenix.url = "github:nix-community/fenix/cf67babe5be61cdcd6d83b4ed5e12088146f3917";
     fenix.inputs.nixpkgs.follows = "nixpkgs";
 
     polkadot.url = "github:andresilva/polkadot.nix";
