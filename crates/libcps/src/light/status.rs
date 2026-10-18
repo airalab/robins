@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Lifecycle and synchronization state of the light node.
 
 /// State of a [`crate::light::LightNode`], observable through

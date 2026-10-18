@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Tests of the embedded light node (`libcps::light`).
 //!
 //! The tests start a real node on an ephemeral loopback port and talk plain

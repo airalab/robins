@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Local WebSocket JSON-RPC server in front of the smoldot light client.
 //!
 //! Each accepted connection gets its own smoldot JSON-RPC frontend, so request

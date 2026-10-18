@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! [`LightNode`]: the embedded smoldot light client behind a local JSON-RPC endpoint.
 
 use super::{

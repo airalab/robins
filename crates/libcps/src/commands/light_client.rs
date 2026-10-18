@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! `cps light-client`: run the embedded light client as a local RPC endpoint.
 
 use crate::display;
