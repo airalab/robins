@@ -25,14 +25,11 @@ use tokio::sync::Notify;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Call {
-    Meta,
-    SetMeta(Vec<u8>),
     SetPayload(Vec<u8>),
 }
 
 #[derive(Default)]
 struct MockState {
-    meta: Option<Vec<u8>>,
     calls: Vec<Call>,
     payload_failures: VecDeque<AnchorError>,
 }
@@ -44,12 +41,6 @@ struct MockTarget {
 }
 
 impl MockTarget {
-    fn with_meta(meta: Option<Vec<u8>>) -> Arc<Self> {
-        let target = Self::default();
-        target.state.lock().unwrap().meta = meta;
-        Arc::new(target)
-    }
-
     fn fail_payloads(&self, errors: Vec<AnchorError>) {
         self.state.lock().unwrap().payload_failures = errors.into();
     }
@@ -61,10 +52,7 @@ impl MockTarget {
     fn payloads(&self) -> Vec<Vec<u8>> {
         self.calls()
             .into_iter()
-            .filter_map(|c| match c {
-                Call::SetPayload(p) => Some(p),
-                _ => None,
-            })
+            .map(|Call::SetPayload(p)| p)
             .collect()
     }
 }
@@ -78,19 +66,6 @@ fn confirmation() -> Confirmation {
 
 #[async_trait]
 impl CpsTarget for MockTarget {
-    async fn meta(&self) -> Result<Option<Vec<u8>>, AnchorError> {
-        let mut state = self.state.lock().unwrap();
-        state.calls.push(Call::Meta);
-        Ok(state.meta.clone())
-    }
-
-    async fn set_meta(&self, meta: &[u8]) -> Result<Confirmation, AnchorError> {
-        let mut state = self.state.lock().unwrap();
-        state.calls.push(Call::SetMeta(meta.to_vec()));
-        state.meta = Some(meta.to_vec());
-        Ok(confirmation())
-    }
-
     async fn set_payload(&self, payload: &[u8]) -> Result<Confirmation, AnchorError> {
         let mut state = self.state.lock().unwrap();
         state.calls.push(Call::SetPayload(payload.to_vec()));
@@ -98,15 +73,6 @@ impl CpsTarget for MockTarget {
             Some(error) => Err(error),
             None => Ok(confirmation()),
         }
-    }
-}
-
-fn descriptor(compression: &str) -> FormatDescriptor {
-    FormatDescriptor {
-        schema: "SignedEnvelopeBatch".into(),
-        schema_version: 1,
-        encoding: "protobuf".into(),
-        compression: compression.into(),
     }
 }
 
@@ -124,13 +90,7 @@ fn store() -> (tempfile::TempDir, Arc<RedbBatchStore>) {
 }
 
 fn anchor(store: &Arc<RedbBatchStore>, target: &Arc<MockTarget>, max_payload: usize) -> Anchor {
-    Anchor::new(
-        store.clone(),
-        target.clone(),
-        descriptor("zstd"),
-        fast_retry(),
-        max_payload,
-    )
+    Anchor::new(store.clone(), target.clone(), fast_retry(), max_payload)
 }
 
 /// Persist ready batches directly, as the batcher would.
@@ -165,53 +125,15 @@ async fn run_until_drained(anchor: Anchor, store: &Arc<RedbBatchStore>) -> Resul
 }
 
 #[tokio::test]
-async fn matching_metadata_triggers_no_update() {
-    let (_dir, store) = store();
-    let current = MetadataBuilder::build(&descriptor("zstd"));
-    let target = MockTarget::with_meta(Some(current));
-
-    let outcome = anchor(&store, &target, 8192)
-        .reconcile_metadata()
-        .await
-        .unwrap();
-    assert_eq!(outcome, MetadataOutcome::Unchanged);
-    assert_eq!(target.calls(), vec![Call::Meta]);
-}
-
-#[tokio::test]
-async fn different_or_missing_metadata_is_updated_and_awaited() {
-    for current in [None, Some(MetadataBuilder::build(&descriptor("none")))] {
-        let (_dir, store) = store();
-        let target = MockTarget::with_meta(current);
-
-        let outcome = anchor(&store, &target, 8192)
-            .reconcile_metadata()
-            .await
-            .unwrap();
-        assert_eq!(outcome, MetadataOutcome::Updated(confirmation()));
-        assert_eq!(
-            target.calls(),
-            vec![
-                Call::Meta,
-                Call::SetMeta(MetadataBuilder::build(&descriptor("zstd")))
-            ]
-        );
-    }
-}
-
-#[tokio::test]
-async fn metadata_is_reconciled_before_any_payload_and_exact_bytes_are_submitted() {
+async fn exact_stored_bytes_are_submitted_in_order() {
     let (_dir, store) = store();
     seed(&store, &[b"first-payload", b"second-payload"]).await;
-    let target = MockTarget::with_meta(None);
+    let target = Arc::new(MockTarget::default());
 
     run_until_drained(anchor(&store, &target, 8192), &store)
         .await
         .unwrap();
 
-    let calls = target.calls();
-    assert_eq!(calls[0], Call::Meta);
-    assert!(matches!(calls[1], Call::SetMeta(_)));
     assert_eq!(
         target.payloads(),
         vec![b"first-payload".to_vec(), b"second-payload".to_vec()]
@@ -224,7 +146,7 @@ async fn metadata_is_reconciled_before_any_payload_and_exact_bytes_are_submitted
 async fn transient_failures_retry_the_same_bytes() {
     let (_dir, store) = store();
     seed(&store, &[b"payload"]).await;
-    let target = MockTarget::with_meta(Some(MetadataBuilder::build(&descriptor("zstd"))));
+    let target = Arc::new(MockTarget::default());
     target.fail_payloads(vec![
         AnchorError::Transient("rpc unavailable".into()),
         AnchorError::Transient("timeout".into()),
@@ -242,7 +164,7 @@ async fn transient_failures_retry_the_same_bytes() {
 async fn permanent_failure_stops_the_anchor_and_keeps_the_batch() {
     let (_dir, store) = store();
     seed(&store, &[b"payload"]).await;
-    let target = MockTarget::with_meta(Some(MetadataBuilder::build(&descriptor("zstd"))));
+    let target = Arc::new(MockTarget::default());
     target.fail_payloads(vec![AnchorError::Permanent("access denied".into())]);
 
     let result = run_until_drained(anchor(&store, &target, 8192), &store).await;
@@ -262,7 +184,7 @@ async fn permanent_failure_stops_the_anchor_and_keeps_the_batch() {
 async fn oversized_batch_is_rejected_not_repaired() {
     let (_dir, store) = store();
     seed(&store, &[b"0123456789"]).await;
-    let target = MockTarget::with_meta(Some(MetadataBuilder::build(&descriptor("zstd"))));
+    let target = Arc::new(MockTarget::default());
 
     let result = run_until_drained(anchor(&store, &target, 4), &store).await;
 
@@ -285,7 +207,7 @@ async fn ready_batches_survive_a_restart_and_are_resubmitted_unchanged() {
 
     // "Restart": reopen the database and start a fresh anchor.
     let store = Arc::new(RedbBatchStore::open(&path).unwrap());
-    let target = MockTarget::with_meta(Some(MetadataBuilder::build(&descriptor("zstd"))));
+    let target = Arc::new(MockTarget::default());
     run_until_drained(anchor(&store, &target, 8192), &store)
         .await
         .unwrap();
@@ -297,7 +219,7 @@ async fn ready_batches_survive_a_restart_and_are_resubmitted_unchanged() {
 #[tokio::test]
 async fn picks_up_batches_committed_while_running() {
     let (_dir, store) = store();
-    let target = MockTarget::with_meta(Some(MetadataBuilder::build(&descriptor("zstd"))));
+    let target = Arc::new(MockTarget::default());
     let controller = ShutdownController::new();
     let ready = Arc::new(Notify::new());
     let task =

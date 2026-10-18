@@ -232,8 +232,7 @@ fn install_metrics() -> metrics_exporter_prometheus::PrometheusHandle {
 /// Startup order: open redb, check the stored payload format against the
 /// configuration (refusing a change that would relabel prepared batches),
 /// then start the batcher (which resumes pending messages) and the anchor
-/// (which reconciles CPS metadata before it submits any payload, starting with
-/// batches prepared before the last shutdown). The chain connection is made
+/// (which submits the batches prepared before the last shutdown first). The chain connection is made
 /// inside the anchor task, so an unreachable chain never blocks ingestion.
 async fn spawn_anchoring(
     config: &Config,
@@ -307,7 +306,6 @@ async fn spawn_anchoring(
     tasks.push(tokio::spawn(anchor::run_chain_anchor(
         chain,
         store,
-        descriptor,
         ready,
         anchor_shutdown,
     )));

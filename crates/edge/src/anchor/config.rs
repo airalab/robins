@@ -54,7 +54,7 @@ pub struct ChainConfig {
     pub endpoint: Option<String>,
     /// Secret URI of the signing account. Never logged.
     pub suri: String,
-    /// CPS node whose payload and metadata are updated.
+    /// CPS node whose payload is updated.
     pub node: NodeId,
     /// Retry back-off for transient failures.
     pub retry: RetryPolicy,

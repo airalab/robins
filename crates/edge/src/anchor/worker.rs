@@ -15,10 +15,10 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! The [`Anchor`] run loop: reconcile metadata, then drain ready batches.
+//! The [`Anchor`] run loop: drain ready batches.
 
-use super::{Anchor, AnchorError, ChainConfig, LibcpsTarget, MetadataOutcome};
-use crate::batch_store::{BatchStore, FormatDescriptor, StoredBatch};
+use super::{Anchor, AnchorError, ChainConfig, LibcpsTarget};
+use crate::batch_store::{BatchStore, StoredBatch};
 use crate::observability::metrics::{
     ANCHOR_CONFIRMATION_TOTAL, ANCHOR_FAILURE_TOTAL, ANCHOR_RETRY_TOTAL, ANCHOR_SUBMISSION_TOTAL,
 };
@@ -49,37 +49,17 @@ enum Retried<T> {
 }
 
 impl Anchor {
-    /// Reconcile metadata, then keep anchoring ready batches until `shutdown`.
+    /// Keep anchoring ready batches until `shutdown`.
     ///
     /// Batches left over from a previous run are submitted first (same ids,
-    /// same bytes); new ones are picked up when `ready` is notified. No payload
-    /// is submitted before metadata reconciliation succeeded. Transient errors
-    /// are retried with back-off; a permanent error stops the anchor and is
+    /// same bytes); new ones are picked up when `ready` is notified. Transient
+    /// errors are retried with back-off; a permanent error stops the anchor and is
     /// returned, leaving the batch durably stored.
     pub async fn run(
         self,
         ready: Arc<Notify>,
         mut shutdown: ShutdownSignal,
     ) -> Result<(), AnchorError> {
-        match self
-            .retry_transient("metadata reconciliation", &mut shutdown, || {
-                self.reconcile_metadata()
-            })
-            .await?
-        {
-            Retried::Done(MetadataOutcome::Unchanged) => {
-                tracing::info!("CPS metadata already up to date");
-            }
-            Retried::Done(MetadataOutcome::Updated(confirmation)) => {
-                tracing::info!(
-                    extrinsic = %confirmation.extrinsic_hash,
-                    block = %confirmation.block_hash,
-                    "CPS metadata updated"
-                );
-            }
-            Retried::Shutdown => return Ok(()),
-        }
-
         loop {
             let batches = match self
                 .retry_transient("loading ready batches", &mut shutdown, || async {
@@ -207,7 +187,6 @@ impl Anchor {
 pub async fn run_chain_anchor(
     chain: ChainConfig,
     store: Arc<dyn BatchStore>,
-    descriptor: FormatDescriptor,
     ready: Arc<Notify>,
     mut shutdown: ShutdownSignal,
 ) {
@@ -239,13 +218,7 @@ pub async fn run_chain_anchor(
     };
     tracing::info!(node = %chain.node, "connected to chain; anchor starting");
 
-    let anchor = Anchor::new(
-        store,
-        Arc::new(target),
-        descriptor,
-        chain.retry,
-        chain.max_payload,
-    );
+    let anchor = Anchor::new(store, Arc::new(target), chain.retry, chain.max_payload);
     if let Err(error) = anchor.run(ready, shutdown).await {
         tracing::error!(%error, "anchor stopped");
     }

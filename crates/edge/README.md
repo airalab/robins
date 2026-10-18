@@ -231,22 +231,20 @@ accepted envelope ─▶ redb pending_messages ─▶ Batcher ─▶ redb ready_
   `zstd`), checks the **final** size against `max_batch_size` and splits
   oversized batches recursively. A single message that can never fit is logged,
   counted (`edge_batcher_payload_too_large_total`) and dropped.
-- **`Anchor`** owns only the transaction lifecycle: it reconciles the CPS node
-  metadata at startup, submits the exact stored bytes with `set_payload`,
+- **`Anchor`** owns only the transaction lifecycle: it submits the exact stored bytes with `set_payload`,
   retries transient failures with the same bytes, waits for finalization and
   then removes the batch. It never serializes, compresses or splits.
 
 The payload is exactly the (compressed) protobuf batch — no magic bytes or
-framing. How to read it is published in the CPS node metadata, e.g.
-`{"schema":"SignedEnvelopeBatch","schema_version":1,"encoding":"protobuf","compression":"zstd"}`;
-decode a payload with `edge batch -d` (zstd) or `edge batch`.
+framing. Describing the format in the CPS node metadata is not done by the
+anchor; it is left to a separate service. Decode a payload with `edge batch -d` (zstd) or `edge batch`.
 
 Delivery is **at-least-once**: if the daemon stops after a batch finalized but
 before local cleanup, that batch is submitted again after restart. The CPS
 payload is overwritten by each `set_payload`, so history lives in the finalized
 blocks. Changing `[batcher].compression` while prepared batches are still
 waiting to be anchored is refused at startup; once they are drained the new
-format is recorded and the CPS metadata updated. An unreachable chain never
+format is recorded (updating the CPS metadata is left to a separate service). An unreachable chain never
 blocks ingestion: messages and batches accumulate on disk until it returns. A
 permanent anchoring error (e.g. the account lost write access) stops the
 anchor, leaves the batch stored, and is logged and counted in

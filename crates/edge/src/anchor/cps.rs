@@ -63,23 +63,6 @@ impl LibcpsTarget {
 
 #[async_trait]
 impl CpsTarget for LibcpsTarget {
-    async fn meta(&self) -> Result<Option<Vec<u8>>, AnchorError> {
-        self.cps.node(self.node).meta().await.map_err(classify)
-    }
-
-    async fn set_meta(&self, meta: &[u8]) -> Result<Confirmation, AnchorError> {
-        let tx = self.cps.node(self.node).set_meta(meta).map_err(classify)?;
-        let receipt = self
-            .cps
-            .submit_finalized(&tx, &self.signer)
-            .await
-            .map_err(classify)?;
-        Ok(Confirmation {
-            extrinsic_hash: receipt.extrinsic_hash.to_string(),
-            block_hash: receipt.block_hash.to_string(),
-        })
-    }
-
     async fn set_payload(&self, payload: &[u8]) -> Result<Confirmation, AnchorError> {
         let tx = self
             .cps

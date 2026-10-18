@@ -29,9 +29,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use edge::anchor::{
-    Anchor, AnchorError, Confirmation, CpsTarget, MetadataBuilder, MetadataOutcome, RetryPolicy,
-};
+use edge::anchor::{Anchor, AnchorError, Confirmation, CpsTarget, RetryPolicy};
 use edge::app::EdgeApp;
 use edge::batch_store::{
     reconcile_format, BatchStore, FormatError, FormatOutcome, RedbBatchStore, Timestamp,
@@ -52,7 +50,6 @@ use tokio::sync::Notify;
 /// A recording CPS node.
 #[derive(Default)]
 struct RecordingTarget {
-    meta: Mutex<Option<Vec<u8>>>,
     payloads: Mutex<Vec<Vec<u8>>>,
     failures: Mutex<VecDeque<AnchorError>>,
 }
@@ -72,15 +69,6 @@ fn confirmation() -> Confirmation {
 
 #[async_trait]
 impl CpsTarget for RecordingTarget {
-    async fn meta(&self) -> Result<Option<Vec<u8>>, AnchorError> {
-        Ok(self.meta.lock().unwrap().clone())
-    }
-
-    async fn set_meta(&self, meta: &[u8]) -> Result<Confirmation, AnchorError> {
-        *self.meta.lock().unwrap() = Some(meta.to_vec());
-        Ok(confirmation())
-    }
-
     async fn set_payload(&self, payload: &[u8]) -> Result<Confirmation, AnchorError> {
         self.payloads.lock().unwrap().push(payload.to_vec());
         match self.failures.lock().unwrap().pop_front() {
@@ -126,15 +114,10 @@ fn signed(tag: u8) -> SignedEnvelope {
     )
 }
 
-fn anchor(
-    store: &Arc<RedbBatchStore>,
-    target: &Arc<RecordingTarget>,
-    compression: Compression,
-) -> Anchor {
+fn anchor(store: &Arc<RedbBatchStore>, target: &Arc<RecordingTarget>) -> Anchor {
     Anchor::new(
         store.clone(),
         target.clone(),
-        batcher_config(compression).format_descriptor(),
         RetryPolicy {
             min: Duration::from_millis(1),
             max: Duration::from_millis(5),
@@ -202,15 +185,10 @@ async fn envelope_travels_from_pending_through_batch_to_exact_payload_on_chain()
         before[0].payload, prepared_payload,
         "not rebuilt on restart"
     );
-    drain(anchor(&store, &target, compression), &store).await;
+    drain(anchor(&store, &target), &store).await;
 
     assert_eq!(target.payloads(), vec![prepared_payload.clone()]);
     assert_eq!(store.counts().await.unwrap().ready_batches, 0);
-    assert_eq!(
-        target.meta.lock().unwrap().clone().unwrap(),
-        MetadataBuilder::build(&batcher_config(compression).format_descriptor())
-    );
-
     // What lands on chain is the compressed protobuf batch, nothing else.
     let serialized = compression.decompress(&prepared_payload).unwrap();
     assert_eq!(decode_envelope_batch(&serialized).unwrap().batch, envelopes);
@@ -244,7 +222,7 @@ async fn crash_after_finalization_resubmits_the_same_bytes() {
     }
 
     let store = open(&path);
-    drain(anchor(&store, &target, Compression::None), &store).await;
+    drain(anchor(&store, &target), &store).await;
 
     let payloads = target.payloads();
     assert_eq!(payloads.len(), 2, "at-least-once: submitted again");
@@ -277,7 +255,7 @@ async fn restored_message_uses_its_original_receive_time() {
 }
 
 #[tokio::test]
-async fn format_change_with_ready_batches_fails_but_empty_queue_reconciles_metadata() {
+async fn format_change_with_ready_batches_fails_until_the_queue_is_drained() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("batcher.redb");
     let none = batcher_config(Compression::None).format_descriptor();
@@ -312,20 +290,11 @@ async fn format_change_with_ready_batches_fails_but_empty_queue_reconciles_metad
         }
     ));
 
-    // Once drained, the change is accepted and CPS metadata follows.
-    drain(anchor(&store, &target, Compression::None), &store).await;
+    // Once drained, the change is accepted.
+    drain(anchor(&store, &target), &store).await;
     assert!(matches!(
         reconcile_format(store.as_ref(), &zstd).await.unwrap(),
         FormatOutcome::Updated { .. }
-    ));
-    let outcome = anchor(&store, &target, Compression::Zstd)
-        .reconcile_metadata()
-        .await
-        .unwrap();
-    assert!(matches!(outcome, MetadataOutcome::Updated(_)));
-    assert!(MetadataBuilder::matches(
-        &zstd,
-        &target.meta.lock().unwrap().clone().unwrap()
     ));
 }
 

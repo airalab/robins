@@ -248,8 +248,7 @@ pub struct BlockchainConfig {
     pub endpoint: Option<String>,
     /// Path to a file containing the anchoring account secret URI.
     pub key_file: Option<PathBuf>,
-    /// CPS node whose payload receives the batches and whose metadata
-    /// describes the payload format. The account must have write access.
+    /// CPS node whose payload receives the batches. The account must have write access.
     pub node_id: Option<u64>,
     /// Delay before the first retry of a transient chain failure, in seconds.
     pub retry_min_secs: u64,

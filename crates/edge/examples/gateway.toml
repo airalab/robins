@@ -88,8 +88,7 @@ reconnect_max_secs = 30
 #
 # Messages and prepared batches survive restarts; delivery is at-least-once (a
 # batch may be anchored twice if the daemon stops after finalization but
-# before the local cleanup). The CPS node metadata is kept in sync with the
-# payload format at startup, and changing `compression` while prepared batches
+# before the local cleanup). Changing `compression` while prepared batches
 # are still waiting to be anchored is refused.
 [batcher]
 # Flush once the oldest message has waited this long (measured from when it
@@ -99,7 +98,7 @@ max_batch_age_secs = 30
 max_batch_size = 8192
 # Maximum envelopes per batch.
 max_messages = 100
-# "zstd" or "none". Documented in the CPS node metadata.
+# "zstd" or "none".
 compression = "zstd"
 
 [blockchain]
