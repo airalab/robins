@@ -102,5 +102,8 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.platform.arch }}
-          path: target/${{ matrix.platform.target }}/production/{cps,mqtt-bridge,edge}
+          path: |
+            target/${{ matrix.platform.target }}/production/cps
+            target/${{ matrix.platform.target }}/production/mqtt-bridge
+            target/${{ matrix.platform.target }}/production/edge
           retention-days: 7
