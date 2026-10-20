@@ -81,9 +81,8 @@ pub enum Error {
     #[error("access denied")]
     AccessDenied,
 
-    /// Creating a scope was refused because the node is already a scope root;
-    /// use `replace_scope` to replace it explicitly.
-    #[error("node {0} is already a scope root, use replace_scope to replace it")]
+    /// Creating a scope was refused because the node is already a scope root.
+    #[error("node {0} is already a scope root")]
     ScopeAlreadyExists(NodeId),
 
     /// The account is not the identity of any node.

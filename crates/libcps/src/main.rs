@@ -15,97 +15,41 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! CPS CLI - Command-line interface for Robonomics CPS pallet.
+//! CPS CLI - command-line interface for the Robonomics CPS pallet.
 //!
-//! This binary provides a beautiful, user-friendly CLI for managing
-//! cyber-physical systems on the Robonomics blockchain.
+//! Commands operate on CPS resources addressed by a common `<TARGET>`: a numeric
+//! node id or an identity account. See [`cli`] for the shared building blocks.
 
 use anyhow::Result;
-use clap::{Parser, Subcommand, ValueEnum};
-use std::str::FromStr;
+use clap::{Args, Parser, Subcommand};
+use std::{io::IsTerminal, process::ExitCode};
 
-// Import from the library
-use libcps::crypto::{EncryptionAlgorithm, Scheme, Signer};
-use libcps::AccountId;
+mod cli;
 
-// CLI-specific modules (display and commands)
-mod commands;
-mod display;
-
-/// Cryptographic scheme of the encryption keypair (CLI selection only).
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
-enum SchemeArg {
-    /// Schnorrkel SR25519 keys (Substrate native)
-    #[default]
-    #[value(alias = "sr")]
-    Sr25519,
-    /// ED25519 keys (IoT, Home Assistant)
-    #[value(alias = "ed")]
-    Ed25519,
-}
-
-/// Run `$body` with `$keypair` aliased to the scheme marker type of a [`SchemeArg`], so
-/// generic code is instantiated for the scheme chosen at runtime.
-macro_rules! with_scheme {
-    ($scheme:expr, $keypair:ident => $body:expr) => {
-        match $scheme {
-            SchemeArg::Sr25519 => {
-                type $keypair = libcps::crypto::Sr25519;
-                $body
-            }
-            SchemeArg::Ed25519 => {
-                type $keypair = libcps::crypto::Ed25519;
-                $body
-            }
-        }
-    };
-}
-
-/// Parses a receiver public key from either an SS58 address or a hex-encoded 32-byte key.
-///
-/// # Supported formats
-/// - **SS58 address**: A valid Substrate SS58-encoded account ID. Decoding is attempted first
-///   using `AccountId::from_str`, which works for both SR25519 and ED25519 accounts
-///   (they share the same 32-byte public key length).
-/// - **Hex string**: A 64-hex-character string representing a 32-byte public key. An optional
-///   `0x` prefix is allowed (e.g. `0xdeadbeef...` or `deadbeef...`).
-///
-/// # Conversion process
-/// 1. Try to decode `addr_or_hex` as an SS58 address. On success, the underlying 32-byte
-///    account ID is returned.
-/// 2. If SS58 decoding fails, strip a leading `0x` (if present) and attempt to decode the
-///    remaining string as hex.
-///
-/// # Errors
-/// - Returns an error if the value is neither a valid SS58 address nor a valid hex string.
-/// - Returns an error if the hex decoding succeeds but the resulting byte length is not
-///   exactly 32 bytes.
-fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
-    // Try SS58 decoding with AccountId (works for both Sr25519 and Ed25519)
-    if let Ok(account_id) = AccountId::from_str(addr_or_hex) {
-        return Ok(account_id.0);
-    }
-
-    // Fall back to hex decoding
-    let hex_str = addr_or_hex.strip_prefix("0x").unwrap_or(addr_or_hex);
-    let bytes = hex::decode(hex_str)
-        .map_err(|e| anyhow::anyhow!("Invalid receiver address (not valid SS58 or hex): {}", e))?;
-
-    if bytes.len() != 32 {
-        return Err(anyhow::anyhow!(
-            "Invalid receiver public key: expected 32 bytes, got {}",
-            bytes.len()
-        ));
-    }
-
-    let mut array = [0u8; 32];
-    array.copy_from_slice(&bytes);
-    Ok(array)
-}
+use cli::{
+    args::{ConfigArgs, ConnectionArgs, OutputArgs},
+    commands::{
+        access::{self, AccessCommand},
+        field::{self, Field, FieldCommand},
+        identity::{self, IdentityCommand},
+        nav::{self, NavArgs, ShowArgs, TreeArgs},
+        node::{self, CreateArgs, DeleteArgs},
+        profile::{self, ProfileCommand},
+        scope::{self, ScopeCommand},
+        status,
+    },
+    config::{self, CliSettings},
+    context::Ctx,
+    light_client,
+    output::Output,
+};
 
 #[derive(Parser)]
 #[command(name = "cps")]
 #[command(version, about = "Robonomics Cyber-Physical System toolbox", long_about = None)]
+#[command(
+    after_help = "TARGET is a numeric node id or an identity account (SS58). An id selects the\nnode projection, an account the identity projection; `node:<id>` and\n`addr:<account>` force the interpretation. Writes always resolve to a node id."
+)]
 #[command(before_help = r#"
 ╔══════════════════════════════════════════════════════╗
 ║                                                      ║
@@ -121,194 +65,86 @@ fn parse_receiver_public_key(addr_or_hex: &str) -> Result<[u8; 32]> {
 ╚══════════════════════════════════════════════════════╝
 "#)]
 struct Cli {
-    /// WebSocket URL of a node RPC endpoint. Run `cps light-client` (`cps lc`) for a
-    /// local light client endpoint when no full node is available
-    #[arg(long, env = "ROBONOMICS_WS_URL", default_value = "ws://127.0.0.1:9944")]
-    ws_url: String,
+    #[command(flatten)]
+    connection: ConnectionArgs,
 
-    /// Account secret URI (e.g., //Alice, //Bob, or seed phrase). Signs transactions
-    /// (SR25519) and is the key for encryption and decryption
-    #[arg(long, env = "ROBONOMICS_SURI")]
-    suri: Option<String>,
+    #[command(flatten)]
+    output: OutputArgs,
+
+    #[command(flatten)]
+    config: ConfigArgs,
 
     /// Log filter: a level (off, error, warn, info, debug, trace) or tracing
     /// directives such as `info,subxt=warn`
-    #[arg(short = 'l', long, env = "RUST_LOG", default_value = "warn")]
+    #[arg(
+        short = 'l',
+        long,
+        global = true,
+        env = "RUST_LOG",
+        default_value = "warn"
+    )]
     log_level: String,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Command,
 }
 
 #[derive(Subcommand)]
-enum Commands {
-    /// Display node information and its children in a beautiful tree format
+enum Command {
+    /// Display one node (not its subtree)
+    Show(ShowArgs),
+    /// Display the subtree below a node
+    Tree(TreeArgs),
+    /// Print the parent, in the projection of the target
+    Parent(NavArgs),
+    /// Print the children, in the projection of the target
+    Children(NavArgs),
+    /// Create a root or child node
+    Create(CreateArgs),
+    /// Delete a node without children
+    Delete(DeleteArgs),
+    /// Node metadata (configuration)
+    Meta {
+        #[command(subcommand)]
+        command: FieldCommand,
+    },
+    /// Node payload (operational data)
+    Payload {
+        #[command(subcommand)]
+        command: FieldCommand,
+    },
+    /// Node identities and identity keys
+    #[command(visible_alias = "id")]
+    Identity {
+        #[command(subcommand)]
+        command: IdentityCommand,
+    },
+    /// Access scopes
+    Scope {
+        #[command(subcommand)]
+        command: ScopeCommand,
+    },
+    /// Capabilities of accounts in a scope
+    Access {
+        #[command(subcommand)]
+        command: AccessCommand,
+    },
+    /// Show the effective configuration and the live state of the connected chain
     #[command(
-        long_about = "Display node information and its children in a tree format.
+        long_about = "Show the profile, config file and RPC endpoint the CLI resolved
+(command line > environment > profile > built-in defaults), then query the
+endpoint for the chain name, genesis hash, runtime version, best and finalized
+blocks and the synchronization state. The effective configuration is shown even
+when the endpoint cannot be reached; the exit status is then 2.
 
-EXAMPLES:
-    # Show node 0
-    cps show 0
-
-    # Show node with decryption attempt (using SR25519)
-    cps show 5 --decrypt
-
-    # Show node with ED25519 decryption
-    cps show 5 --decrypt --scheme ed25519"
+Works the same against a full node, a remote RPC service and `cps lc`."
     )]
-    Show {
-        /// Node ID to display
-        node_id: u64,
-
-        /// Attempt to decrypt encrypted data
-        #[arg(short = 'd', long)]
-        decrypt: bool,
-
-        /// Cryptographic scheme for decryption (sr25519, ed25519)
-        #[arg(long, value_enum, ignore_case = true, default_value_t = SchemeArg::Sr25519)]
-        scheme: SchemeArg,
+    Status,
+    /// Configuration profiles
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
     },
-
-    /// Create a new node (root or child)
-    #[command(long_about = "Create a new node (root or child).
-
-EXAMPLES:
-    # Create root node
-    cps create --meta '{\"type\":\"sensor\"}' --payload '22.5C'
-
-    # Create child node
-    cps create --parent 0 --payload 'operational data'
-
-    # Create with encryption (SR25519, default)
-    cps create --parent 0 --payload 'secret data' \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
-
-    # Create with ED25519 encryption (Home Assistant compatible)
-    cps create --parent 0 --payload 'secret data' \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY \\
-        --scheme ed25519
-
-    # Create with specific cipher
-    cps create --parent 0 --payload 'secret data' \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY \\
-        --cipher aesgcm256")]
-    Create {
-        /// Parent node ID (omit for root node)
-        #[arg(short = 'p', long)]
-        parent: Option<u64>,
-
-        /// Metadata (configuration data)
-        #[arg(long)]
-        meta: Option<String>,
-
-        /// Payload (operational data)
-        #[arg(long)]
-        payload: Option<String>,
-
-        /// Receiver public key or SS58 address for encryption. If provided, data will be encrypted.
-        /// Supports both SS58 addresses and hex-encoded public keys.
-        #[arg(short = 'r', long)]
-        receiver_public: Option<String>,
-
-        /// Encryption algorithm (xchacha20, aesgcm256, chacha20)
-        #[arg(long, default_value = "xchacha20")]
-        cipher: String,
-
-        /// Cryptographic scheme for encryption (sr25519, ed25519)
-        #[arg(long, value_enum, ignore_case = true, default_value_t = SchemeArg::Sr25519)]
-        scheme: SchemeArg,
-    },
-
-    /// Update node metadata
-    #[command(long_about = "Update node metadata.
-
-EXAMPLES:
-    # Update metadata
-    cps set-meta 5 '{\"name\":\"Updated Sensor\"}'
-
-    # Update with encryption
-    cps set-meta 5 'private config' \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
-
-    # Update with ED25519 encryption
-    cps set-meta 5 'private config' \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY \\
-        --scheme ed25519")]
-    SetMeta {
-        /// Node ID
-        node_id: u64,
-
-        /// New metadata
-        data: String,
-
-        /// Receiver public key or SS58 address for encryption. If provided, data will be encrypted.
-        /// Supports both SS58 addresses and hex-encoded public keys.
-        #[arg(short = 'r', long)]
-        receiver_public: Option<String>,
-
-        /// Encryption algorithm (xchacha20, aesgcm256, chacha20)
-        #[arg(long, default_value = "xchacha20")]
-        cipher: String,
-
-        /// Cryptographic scheme for encryption (sr25519, ed25519)
-        #[arg(long, value_enum, ignore_case = true, default_value_t = SchemeArg::Sr25519)]
-        scheme: SchemeArg,
-    },
-
-    /// Update node payload
-    #[command(long_about = "Update node payload (operational data).
-
-EXAMPLES:
-    # Update temperature reading
-    cps set-payload 5 '23.1C'
-
-    # Update with encryption
-    cps set-payload 5 'encrypted telemetry' \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
-
-    # Update with ED25519 and AES-GCM
-    cps set-payload 5 'encrypted telemetry' \\
-        --receiver-public 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY \\
-        --scheme ed25519 --cipher aesgcm256")]
-    SetPayload {
-        /// Node ID
-        node_id: u64,
-
-        /// New payload
-        data: String,
-
-        /// Receiver public key or SS58 address for encryption. If provided, data will be encrypted.
-        /// Supports both SS58 addresses and hex-encoded public keys.
-        #[arg(short = 'r', long)]
-        receiver_public: Option<String>,
-
-        /// Encryption algorithm (xchacha20, aesgcm256, chacha20)
-        #[arg(long, default_value = "xchacha20")]
-        cipher: String,
-
-        /// Cryptographic scheme for encryption (sr25519, ed25519)
-        #[arg(long, value_enum, ignore_case = true, default_value_t = SchemeArg::Sr25519)]
-        scheme: SchemeArg,
-    },
-
-    /// Delete a node (must have no children)
-    #[command(long_about = "Delete a node (must have no children).
-
-EXAMPLES:
-    # Remove node with confirmation
-    cps remove 5
-
-    # Remove without confirmation
-    cps remove 5 --force")]
-    Remove {
-        /// Node ID to remove
-        node_id: u64,
-
-        /// Skip confirmation prompt
-        #[arg(short = 'f', long)]
-        force: bool,
-    },
-
     /// Run the embedded light client as a local JSON-RPC endpoint
     #[command(
         visible_alias = "lc",
@@ -328,22 +164,28 @@ EXAMPLES:
     # Use it from another terminal
     cps --ws-url ws://127.0.0.1:9955 show 0"
     )]
-    LightClient {
-        /// Address of the local RPC endpoint
-        #[arg(long, default_value = commands::light_client::DEFAULT_LISTEN)]
-        listen: String,
-
-        /// Allow a non-loopback listen address. The endpoint has no authentication
-        #[arg(long)]
-        allow_external: bool,
-    },
+    LightClient(LightClientArgs),
 }
 
+#[derive(Args)]
+struct LightClientArgs {
+    /// Address of the local RPC endpoint
+    #[arg(long, default_value = light_client::DEFAULT_LISTEN)]
+    listen: String,
+
+    /// Allow a non-loopback listen address. The endpoint has no authentication
+    #[arg(long)]
+    allow_external: bool,
+}
+
+/// Exit status: 0 success, 1 a negative answer (`access check`), 2 any error.
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    // Initialize logging
+    if !std::io::stderr().is_terminal() {
+        colored::control::set_override(false);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_new(&cli.log_level)
@@ -352,172 +194,73 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let connection = commands::Connection {
-        url: cli.ws_url.clone(),
-        suri: cli.suri.clone(),
+    match run(cli).await {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("error: {error:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+async fn run(cli: Cli) -> Result<ExitCode> {
+    let resolved = config::resolve_from_env(CliSettings {
+        config: cli.config.config,
+        profile: cli.config.profile,
+        url: cli.connection.ws_url,
+        output: cli.output.output,
+        wait: cli.output.wait,
+    })?;
+    let ctx = Ctx {
+        out: Output::new(resolved.effective.output),
+        cfg: resolved.effective,
+        file: resolved.file,
+        suri: cli.connection.suri,
     };
-
-    // Execute commands
+    let ctx = &ctx;
     match cli.command {
-        Commands::Show {
-            node_id,
-            decrypt,
-            scheme,
-        } => {
-            with_scheme!(scheme, P => {
-                // Create keypair if decryption is requested
-                let cipher = cipher_keypair::<P>(&cli.suri, decrypt, "decryption")?;
-                commands::show::execute(&connection, cipher.as_ref(), node_id).await?
-            });
-        }
-        Commands::Create {
-            parent,
-            meta,
-            payload,
-            receiver_public,
-            cipher,
-            scheme,
-        } => {
-            // Parse receiver public key if provided (supports both SS58 address and hex)
-            let receiver_pub_bytes = receiver_public
-                .as_deref()
-                .map(parse_receiver_public_key)
-                .transpose()?;
-
-            // Encryption requires BOTH sender SURI and receiver public key.
-            // - SURI (sender's seed phrase): Used to derive the sender's keypair for ECDH
-            // - receiver_public: The recipient's public key for deriving the shared secret
-            // If receiver_public is None, data will be stored as plaintext (no encryption).
-            let algorithm_opt = parse_algorithm(receiver_public.is_some(), &cipher)?;
-            with_scheme!(scheme, P => {
-                let keypair =
-                    cipher_keypair::<P>(&cli.suri, receiver_public.is_some(), "encryption")?;
-                commands::create::execute(
-                    &connection,
-                    keypair.as_ref(),
-                    parent,
-                    meta,
-                    payload,
-                    receiver_pub_bytes,
-                    algorithm_opt,
-                )
+        Command::Show(args) => nav::show(ctx, args).await?,
+        Command::Tree(args) => nav::tree(ctx, args).await?,
+        Command::Parent(args) => nav::parent(ctx, args).await?,
+        Command::Children(args) => nav::children(ctx, args).await?,
+        Command::Create(args) => node::create(ctx, args).await?,
+        Command::Delete(args) => node::delete(ctx, args).await?,
+        Command::Meta { command } => field::run(ctx, Field::Meta, command).await?,
+        Command::Payload { command } => field::run(ctx, Field::Payload, command).await?,
+        Command::Identity { command } => identity::run(ctx, command).await?,
+        Command::Scope { command } => scope::run(ctx, command).await?,
+        Command::Access { command } => return access::run(ctx, command).await,
+        Command::Status => return status::run(ctx).await,
+        Command::Profile { command } => profile::run(ctx, command)?,
+        Command::LightClient(args) => {
+            light_client::execute(light_client::node_config(&args.listen, args.allow_external))
                 .await?
-            });
-        }
-        Commands::SetMeta {
-            node_id,
-            data,
-            receiver_public,
-            cipher,
-            scheme,
-        } => {
-            let receiver_pub_bytes = receiver_public
-                .as_deref()
-                .map(parse_receiver_public_key)
-                .transpose()?;
-            let algorithm_opt = parse_algorithm(receiver_public.is_some(), &cipher)?;
-            with_scheme!(scheme, P => {
-                let keypair =
-                    cipher_keypair::<P>(&cli.suri, receiver_public.is_some(), "encryption")?;
-                commands::set_meta::execute(
-                    &connection,
-                    keypair.as_ref(),
-                    node_id,
-                    data,
-                    receiver_pub_bytes,
-                    algorithm_opt,
-                )
-                .await?
-            });
-        }
-        Commands::SetPayload {
-            node_id,
-            data,
-            receiver_public,
-            cipher,
-            scheme,
-        } => {
-            let receiver_pub_bytes = receiver_public
-                .as_deref()
-                .map(parse_receiver_public_key)
-                .transpose()?;
-            let algorithm_opt = parse_algorithm(receiver_public.is_some(), &cipher)?;
-            with_scheme!(scheme, P => {
-                let keypair =
-                    cipher_keypair::<P>(&cli.suri, receiver_public.is_some(), "encryption")?;
-                commands::set_payload::execute(
-                    &connection,
-                    keypair.as_ref(),
-                    node_id,
-                    data,
-                    receiver_pub_bytes,
-                    algorithm_opt,
-                )
-                .await?
-            });
-        }
-        Commands::Remove { node_id, force } => {
-            commands::remove::execute(&connection, node_id, force).await?;
-        }
-        Commands::LightClient {
-            listen,
-            allow_external,
-        } => {
-            commands::light_client::execute(commands::light_client::node_config(
-                &listen,
-                allow_external,
-            ))
-            .await?;
         }
     }
-
-    Ok(())
-}
-
-/// Signer for encryption or decryption of the scheme `S`, created only when
-/// `needed`.
-fn cipher_keypair<S: Scheme>(
-    suri: &Option<String>,
-    needed: bool,
-    purpose: &str,
-) -> Result<Option<Signer<S>>> {
-    if !needed {
-        return Ok(None);
-    }
-    let suri = suri
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("SURI required for {purpose}"))?;
-    Ok(Some(Signer::from_suri(suri)?))
-}
-
-/// Parse the `--cipher` name when encryption is requested.
-fn parse_algorithm(encrypting: bool, name: &str) -> Result<Option<EncryptionAlgorithm>> {
-    if !encrypting {
-        return Ok(None);
-    }
-    EncryptionAlgorithm::from_str(name)
-        .map(Some)
-        .map_err(|e| anyhow::anyhow!("Invalid cipher: {}", e))
+    Ok(ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(std::iter::once("cps").chain(args.iter().copied())).unwrap()
     }
 
     #[test]
+    fn command_tree_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
     fn light_client_command_and_alias_use_the_default_listener() {
         for name in ["light-client", "lc"] {
             match parse(&[name]).command {
-                Commands::LightClient {
-                    listen,
-                    allow_external,
-                } => {
-                    assert_eq!(listen, "127.0.0.1:9944");
-                    assert!(!allow_external);
+                Command::LightClient(args) => {
+                    assert_eq!(args.listen, "127.0.0.1:9944");
+                    assert!(!args.allow_external);
                 }
                 _ => panic!("`cps {name}` is not the light client command"),
             }
@@ -527,13 +270,79 @@ mod tests {
     #[test]
     fn light_client_listen_is_configurable() {
         match parse(&["lc", "--listen", "127.0.0.1:9955"]).command {
-            Commands::LightClient { listen, .. } => assert_eq!(listen, "127.0.0.1:9955"),
+            Command::LightClient(args) => assert_eq!(args.listen, "127.0.0.1:9955"),
             _ => panic!("not the light client command"),
         }
     }
 
     #[test]
-    fn ws_url_defaults_to_the_light_client_endpoint() {
-        assert_eq!(parse(&["show", "0"]).ws_url, "ws://127.0.0.1:9944");
+    fn ws_url_is_unset_unless_given() {
+        assert_eq!(parse(&["show", "0"]).connection.ws_url, None);
+        assert_eq!(
+            parse(&["--ws-url", "ws://h:1", "show", "0"])
+                .connection
+                .ws_url,
+            Some("ws://h:1".into())
+        );
+    }
+
+    #[test]
+    fn config_selection_options_are_global() {
+        let cli = parse(&[
+            "status",
+            "--profile",
+            "dev",
+            "--config",
+            "c.toml",
+            "--wait",
+            "best",
+        ]);
+        assert_eq!(cli.config.profile.as_deref(), Some("dev"));
+        assert_eq!(cli.config.config, Some("c.toml".into()));
+        assert_eq!(cli.output.wait, Some(config::WaitPolicy::Best));
+    }
+
+    #[test]
+    fn profile_and_status_commands_parse() {
+        assert!(matches!(parse(&["status"]).command, Command::Status));
+        assert!(matches!(
+            parse(&["profile", "list"]).command,
+            Command::Profile { .. }
+        ));
+        assert!(matches!(
+            parse(&["profile", "show", "dev"]).command,
+            Command::Profile { .. }
+        ));
+    }
+
+    #[test]
+    fn id_is_an_alias_of_identity() {
+        for name in ["identity", "id"] {
+            assert!(matches!(
+                parse(&[name, "generate"]).command,
+                Command::Identity { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn global_options_work_before_and_after_the_command() {
+        let a = parse(&["--output", "json", "show", "42"]);
+        let b = parse(&["show", "42", "--output", "json"]);
+        assert!(a.output.output == b.output.output);
+        assert_eq!(a.output.output, Some(cli::output::OutputFormat::Json));
+    }
+
+    #[test]
+    fn legacy_commands_are_removed() {
+        for legacy in ["set-meta", "set-payload", "remove"] {
+            assert!(Cli::try_parse_from(["cps", legacy, "1"]).is_err());
+        }
+    }
+
+    #[test]
+    fn writes_do_not_accept_at() {
+        assert!(Cli::try_parse_from(["cps", "payload", "set", "1", "x", "--at", "0x00"]).is_err());
+        assert!(Cli::try_parse_from(["cps", "delete", "1", "--at", "0x00"]).is_err());
     }
 }

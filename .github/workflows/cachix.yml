@@ -31,7 +31,6 @@ jobs:
           cachix_token: "${{ secrets.CACHIX_AUTH_TOKEN }}"
 
       - run: nix develop --command bash -c "echo OK"
-      - run: nix develop .#benchmarking --command bash -c "echo OK"
 
   build:
     runs-on: ubuntu-latest
@@ -39,7 +38,7 @@ jobs:
       status: ${{ job.status }}
     strategy:
       matrix:
-        package: [libcps]
+        package: [libcps,mqtt-bridge,edge]
     steps:
       - uses: actions/checkout@v5
 

@@ -29,7 +29,7 @@ required-features = ["cli"]
 [dependencies]
 # Blockchain
 subxt.workspace = true
-sp-core.workspace = true
+polkadot-sdk.workspace = true
 parity-scale-codec.workspace = true
 robonomics-runtime-subxt-api.workspace = true
 robonomics-chain-spec = { workspace = true, optional = true }
@@ -51,6 +51,7 @@ futures-util = { workspace = true, optional = true }
 clap = { workspace = true, features = ["env"], optional = true }
 colored = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
 
 # Serialization
 serde.workspace = true
@@ -77,11 +78,35 @@ light-client = [
   "dep:robonomics-chain-spec",
 ]
 # The `cps` binary always includes the light client (`cps light-client`).
-cli = ["light-client", "clap", "colored", "indicatif", "tracing-subscriber"]
+cli = [
+  "light-client",
+  "dep:clap",
+  "dep:colored",
+  "dep:indicatif",
+  "dep:toml",
+  "dep:tracing-subscriber",
+]
+
+[dev-dependencies]
+tempfile.workspace = true
+assert_cmd.workspace = true
+
+# Examples form a numbered journey, see `examples/README.md` and the book in `docs/`.
+[[example]]
+name = "01_light_client"
+required-features = ["light-client"]
 
 [[example]]
-name = "light_client_read"
+name = "02_explore_network"
 required-features = ["light-client"]
+
+[[example]]
+name = "03_watch"
+required-features = ["light-client"]
+
+[[test]]
+name = "cli_profiles"
+required-features = ["cli"]
 
 [[test]]
 name = "light_node"

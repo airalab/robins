@@ -249,14 +249,9 @@ pub(crate) fn delete_node(id: NodeId) -> Transaction<()> {
 
 /// Create a scope at a node that is not a scope root yet.
 pub(crate) fn create_scope(id: NodeId) -> Transaction<ScopeId> {
-    let mut tx = replace_scope(id);
+    let mut tx = Transaction::new(Call::CreateScope(id), created_scope);
     tx.precondition = Some(Precondition::NotScopeRoot(id));
     tx
-}
-
-/// Create a scope at a node, replacing the scope it roots, if any.
-pub(crate) fn replace_scope(id: NodeId) -> Transaction<ScopeId> {
-    Transaction::new(Call::CreateScope(id), created_scope)
 }
 
 pub(crate) fn grant_access(id: NodeId, account: AccountId, access: Grant) -> Transaction<()> {

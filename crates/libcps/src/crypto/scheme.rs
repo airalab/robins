@@ -22,9 +22,9 @@
 //! signer of the other: the mismatch is a compile error.
 
 use anyhow::{anyhow, Result};
+use polkadot_sdk::sp_core::{ed25519, sr25519, Pair};
 use robonomics_runtime_subxt_api::MultiSignature;
 use sha2::{Digest, Sha512};
-use sp_core::{ed25519, sr25519, Pair};
 
 mod sealed {
     pub trait Sealed {}

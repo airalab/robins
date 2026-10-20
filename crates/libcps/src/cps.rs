@@ -19,10 +19,12 @@
 
 use crate::{
     address::{Address, AddressAt},
+    api,
     backend::{self, Api, At},
     crypto::{Scheme, Signer},
     error::{Error, Result},
     node::{Node, NodeAt},
+    permit::IdentityPermitPayload,
     scope::{Scope, ScopeAt},
     transaction::{Precondition, Progress, Transaction},
     types::{AccountId, Hash, NodeId, ScopeId},
@@ -158,6 +160,49 @@ impl Cps {
         self.submit(tx, signer).await?.wait_finalized().await
     }
 
+    /// Genesis hash of the chain, which binds identity permits to it.
+    pub fn genesis_hash(&self) -> Hash {
+        self.client.genesis_hash()
+    }
+
+    /// Payload an identity account signs to issue a permit for `scope`, valid
+    /// until the block `valid_until`.
+    ///
+    /// The payload is built from the chain context (genesis hash) and the
+    /// runtime limits, so the signing bytes are exactly what the runtime
+    /// verifies. Signing is separate: use [`IdentityPermitPayload::sign`] or
+    /// sign [`IdentityPermitPayload::signing_bytes`] elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Crypto`] if `valid_until` is already past or further ahead than
+    /// the runtime allows (relative to the latest finalized block), because the
+    /// permit would be unusable.
+    pub async fn identity_permit_payload(
+        &self,
+        scope: ScopeId,
+        valid_until: u32,
+    ) -> Result<IdentityPermitPayload> {
+        let at = self.finalized().await?;
+        let now = at.block_number();
+        let ttl = at.max_identity_permit_ttl()?;
+        if valid_until < now {
+            return Err(Error::Crypto(format!(
+                "permit validity {valid_until} is before the current block {now}"
+            )));
+        }
+        if u64::from(valid_until) > u64::from(now) + u64::from(ttl) {
+            return Err(Error::Crypto(format!(
+                "permit validity {valid_until} exceeds the runtime limit: at most {ttl} blocks after block {now}"
+            )));
+        }
+        Ok(IdentityPermitPayload {
+            genesis_hash: self.genesis_hash(),
+            scope,
+            valid_until,
+        })
+    }
+
     /// Verify the client-side intent of `tx` against the finalized state.
     async fn check_precondition<T>(&self, tx: &Transaction<T>) -> Result<()> {
         match tx.precondition {
@@ -196,6 +241,20 @@ impl CpsAt {
     /// Hash of the block all reads use.
     pub fn block_hash(&self) -> Hash {
         self.at.block_hash()
+    }
+
+    /// Number of the block all reads use.
+    pub fn block_number(&self) -> u32 {
+        u32::try_from(self.at.block_number()).unwrap_or(u32::MAX)
+    }
+
+    /// Maximum number of blocks an identity permit may be valid ahead of the
+    /// current block (`MaxIdentityPermitTtl` runtime constant).
+    pub fn max_identity_permit_ttl(&self) -> Result<u32> {
+        self.at
+            .constants()
+            .entry(api::constants().cps().max_identity_permit_ttl())
+            .map_err(Error::runtime)
     }
 
     /// Handle to the node `id` at this block.
@@ -245,23 +304,80 @@ impl<T> PendingTransaction<T> {
             .wait_for_finalized()
             .await
             .map_err(Error::transaction)?;
+        Self::receipt(&self.tx, in_block).await
+    }
+
+    /// Wait until the transaction is included in a best block (finalized or not)
+    /// and successfully executed.
+    ///
+    /// The returned [`TxReceipt::block_hash`] is the including block, which may
+    /// still be reverted by a reorganization until it is finalized.
+    ///
+    /// # Errors
+    ///
+    /// As [`PendingTransaction::wait_finalized`].
+    pub async fn wait_in_block(mut self) -> Result<TxReceipt<T>> {
+        use subxt::{
+            error::{TransactionProgressError, TransactionStatusError},
+            transactions::TransactionStatus,
+        };
+        let in_block = loop {
+            let status = self
+                .progress
+                .next()
+                .await
+                .ok_or_else(|| {
+                    Error::transaction(
+                        TransactionProgressError::UnexpectedEndOfTransactionStatusStream,
+                    )
+                })?
+                .map_err(Error::transaction)?;
+            match status {
+                TransactionStatus::InBestBlock(block)
+                | TransactionStatus::InFinalizedBlock(block) => {
+                    break block;
+                }
+                TransactionStatus::Error { message } => {
+                    return Err(Error::transaction(TransactionStatusError::Error(message)));
+                }
+                TransactionStatus::Invalid { message } => {
+                    return Err(Error::transaction(TransactionStatusError::Invalid(message)));
+                }
+                TransactionStatus::Dropped { message } => {
+                    return Err(Error::transaction(TransactionStatusError::Dropped(message)));
+                }
+                _ => {}
+            }
+        };
+        Self::receipt(&self.tx, in_block).await
+    }
+
+    /// Receipt of a transaction included in `in_block`, once its events report success.
+    async fn receipt(
+        tx: &Transaction<T>,
+        in_block: subxt::transactions::TransactionInBlock<
+            robonomics_runtime_subxt_api::RobonomicsConfig,
+            subxt::client::OnlineClientAtBlockImpl<robonomics_runtime_subxt_api::RobonomicsConfig>,
+        >,
+    ) -> Result<TxReceipt<T>> {
         let block_hash = in_block.block_hash();
         let extrinsic_hash = in_block.extrinsic_hash();
         let events = in_block.wait_for_success().await.map_err(Error::outcome)?;
         Ok(TxReceipt {
             extrinsic_hash,
             block_hash,
-            result: self.tx.decode_result(&events)?,
+            result: tx.decode_result(&events)?,
         })
     }
 }
 
-/// Outcome of a finalized transaction.
+/// Outcome of a successfully executed transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TxReceipt<T> {
     /// Hash of the extrinsic.
     pub extrinsic_hash: Hash,
-    /// Hash of the finalized block that includes the extrinsic.
+    /// Hash of the block that includes the extrinsic: finalized, unless the
+    /// transaction was awaited with [`PendingTransaction::wait_in_block`].
     pub block_hash: Hash,
     /// Semantic result: the created [`NodeId`](crate::NodeId) /
     /// [`ScopeId`](crate::ScopeId), or `()`.

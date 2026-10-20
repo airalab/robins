@@ -126,9 +126,8 @@
 //!     cps.submit_finalized(&tx, &keypair).await?;
 //! }
 //!
-//! // `create_scope` refuses a node that already roots a scope; `replace_scope`
-//! // replaces it explicitly.
-//! let scope = cps.submit_finalized(&node.replace_scope(), &keypair).await?.result;
+//! // `create_scope` refuses a node that already roots a scope.
+//! let scope = cps.submit_finalized(&node.create_scope(), &keypair).await?.result;
 //!
 //! cps.submit_finalized(&node.clear_identity(), &keypair).await?;
 //! # let _ = scope;
@@ -194,9 +193,11 @@ mod backend;
 mod cps;
 pub mod crypto;
 mod error;
+pub mod identity;
 #[cfg(feature = "light-client")]
 pub mod light;
 mod node;
+pub mod permit;
 mod read;
 mod scope;
 mod transaction;
@@ -207,7 +208,9 @@ pub(crate) use robonomics_runtime_subxt_api::api;
 pub use address::{Address, AddressAt};
 pub use cps::{Cps, CpsAt, PendingTransaction, TxReceipt};
 pub use error::{Error, IdentityError, Result};
+pub use identity::{IdentityKey, IdentityScheme};
 pub use node::{create_root, MetaUpdate, MetaWatcher, Node, NodeAt, PayloadUpdate, PayloadWatcher};
+pub use permit::{IdentityPermitPayload, PermitArtifact};
 pub use scope::{Scope, ScopeAt};
 pub use transaction::Transaction;
 pub use types::{

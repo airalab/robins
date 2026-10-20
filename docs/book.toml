@@ -1,0 +1,13 @@
+[book]
+title = "Robonomics CPS: from explorer to network builder"
+authors = ["Airalab <research@robonomics.network>"]
+description = "A guided tour of the Robonomics Network with the libcps library and the cps command-line tool."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/airalab/robins"
+edit-url-template = "https://github.com/airalab/robins/edit/master/docs/{path}"
