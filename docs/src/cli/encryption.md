@@ -30,9 +30,10 @@ Choose the scheme to match the key type: SR25519 is Substrate-native and the def
 devices and Home Assistant.
 
 ```bash
+RECEIVER_ED=$(cps identity inspect //Bob --scheme ed25519 --output json | sed -E 's/.*"address":"([^"]+)".*/\1/')
 cps --suri //Alice create \
     --payload 'home assistant data' \
-    --receiver-public "$RECEIVER" \
+    --receiver-public "$RECEIVER_ED" \
     --cipher aesgcm256 \
     --scheme ed25519
 ```
