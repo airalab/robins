@@ -15,7 +15,7 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Address-based access and node identities on a local testnet.
+//! Step 6: address-based access and node identities on a local testnet.
 //!
 //! CPS has one tree with two ways to address it: the canonical [`NodeId`] and the
 //! identity [`AccountId`] a node may be bound to. This example creates a small tree,
@@ -23,15 +23,16 @@
 //! interfaces, converts explicitly between them and reads a consistent
 //! [`NodeSnapshot`]. It finally clears the identity and removes the nodes.
 //!
-//! Start a development node first (see `rpc_client_write`), then:
+//! Start a development node first (see `05_local_node_tree`), then:
 //!
 //! ```text
-//! cargo run -p libcps --example address_identity --no-default-features
+//! cargo run -p libcps --example 06_identity --no-default-features
 //! ```
 //!
 //! Environment: `ROBONOMICS_WS_URL` (default `ws://127.0.0.1:9944`) and
 //! `ROBONOMICS_SURI` (default `//Alice`).
 
+// ANCHOR: code
 use libcps::{
     crypto::{Signer, Sr25519},
     Cps, CreateNode, Error, IdentityAssignment, NodeId,
@@ -137,3 +138,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("deleted {child} and {root}");
     Ok(())
 }
+// ANCHOR_END: code

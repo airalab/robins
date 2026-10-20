@@ -15,31 +15,34 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Read the production chain with the embedded light client.
+//! Step 2: explore the Robonomics Network, e.g. the sensor.social infrastructure nodes.
 //!
-//! No RPC endpoint and no keys are needed: [`LightNode`] starts a light client
-//! for the Polkadot relay chain and the Robonomics parachain (chain specs are
-//! embedded in `robonomics-chain-spec`), syncs over p2p and serves a local
-//! JSON-RPC endpoint that the RPC-only [`Cps`] connects to. The light node is
-//! stateless, so every run syncs from scratch and may take a while until a
-//! finalized block is available.
+//! The example starts the embedded light client (see `01_light_client`) and prints the
+//! whole CPS tree below a root node: owner scope, metadata, payload and children. All
+//! reads are pinned to one finalized block, so the printed tree is a consistent
+//! snapshot even while the chain moves on.
 //!
-//! The example prints the whole CPS tree below a root node. All reads are pinned
-//! to one finalized block, so the printed tree is a consistent snapshot.
+//! The root node is taken from the first argument or `CPS_ROOT_NODE`; without both
+//! the sensor.social root [`SENSOR_SOCIAL_ROOT`] is used. Set `CPS_MAX_DEPTH` to limit
+//! how deep the tree is walked (default: unlimited).
 //!
 //! ```text
-//! cargo run -p libcps --example light_client_read --no-default-features \
-//!     --features light-client -- <ROOT_NODE_ID>
-//! # or
-//! CPS_ROOT_NODE=<ROOT_NODE_ID> cargo run -p libcps --example light_client_read --no-default-features \
-//!     --features light-client
+//! cargo run -p libcps --example 02_explore_network --no-default-features \
+//!     --features light-client -- [ROOT_NODE_ID]
 //! ```
 
+// ANCHOR: code
 use libcps::{
     light::{LightNode, LightNodeConfig},
     Cps, CpsAt, Error, NodeId,
 };
 use std::{future::Future, pin::Pin};
+
+/// Root node of the sensor.social infrastructure, used when none is given.
+///
+/// This is a placeholder until the production node ID is published; pass the real one
+/// as an argument or through `CPS_ROOT_NODE`.
+const SENSOR_SOCIAL_ROOT: u64 = 0;
 
 /// Longest value, in bytes, printed in full; longer values are cut.
 const PREVIEW_LEN: usize = 64;
@@ -57,13 +60,15 @@ fn render(data: &[u8]) -> String {
     text
 }
 
-/// Print `node` and its descendants, reading the state of the pinned block `at`.
+/// Print `node` and its descendants down to `max_depth`, reading the state of the
+/// pinned block `at`.
 ///
 /// Recursion in `async fn` needs a boxed future.
 fn print_tree<'a>(
     at: &'a CpsAt,
     node: NodeId,
     depth: usize,
+    max_depth: usize,
 ) -> Pin<Box<dyn Future<Output = libcps::Result<()>> + 'a>> {
     Box::pin(async move {
         let handle = at.node(node);
@@ -81,8 +86,15 @@ fn print_tree<'a>(
             println!("{indent}  payload: {}", render(&payload));
         }
 
-        for child in handle.children().await? {
-            print_tree(at, child, depth + 1).await?;
+        let children = handle.children().await?;
+        if depth >= max_depth {
+            if !children.is_empty() {
+                println!("{indent}  ... {} children not shown", children.len());
+            }
+            return Ok(());
+        }
+        for child in children {
+            print_tree(at, child, depth + 1, max_depth).await?;
         }
         Ok(())
     })
@@ -90,12 +102,21 @@ fn print_tree<'a>(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let root: u64 = std::env::args()
+    let root: u64 = match std::env::args()
         .nth(1)
         .or_else(|| std::env::var("CPS_ROOT_NODE").ok())
-        .ok_or("usage: light_client_read <ROOT_NODE_ID> (or set CPS_ROOT_NODE)")?
-        .parse()
-        .map_err(|e| format!("invalid root node id: {e}"))?;
+    {
+        Some(id) => id
+            .parse()
+            .map_err(|e| format!("invalid root node id: {e}"))?,
+        None => SENSOR_SOCIAL_ROOT,
+    };
+    let max_depth = match std::env::var("CPS_MAX_DEPTH") {
+        Ok(depth) => depth
+            .parse()
+            .map_err(|e| format!("invalid CPS_MAX_DEPTH: {e}"))?,
+        Err(_) => usize::MAX,
+    };
 
     println!("Starting light client, waiting for the first finalized block...");
     let light = LightNode::start(LightNodeConfig::default()).await?;
@@ -103,9 +124,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cps = Cps::connect(light.rpc_url()).await?;
 
     let at = cps.finalized().await?;
-    println!("Synced, reading at finalized block {:?}\n", at.block_hash());
+    println!(
+        "Synced, reading at finalized block #{} ({:?})\n",
+        at.block_number(),
+        at.block_hash()
+    );
 
-    print_tree(&at, NodeId::from(root), 0).await?;
+    print_tree(&at, NodeId::from(root), 0, max_depth).await?;
     light.shutdown().await?;
     Ok(())
 }
+// ANCHOR_END: code

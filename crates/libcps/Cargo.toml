@@ -91,8 +91,17 @@ cli = [
 tempfile.workspace = true
 assert_cmd.workspace = true
 
+# Examples form a numbered journey, see `examples/README.md` and the book in `docs/`.
 [[example]]
-name = "light_client_read"
+name = "01_light_client"
+required-features = ["light-client"]
+
+[[example]]
+name = "02_explore_network"
+required-features = ["light-client"]
+
+[[example]]
+name = "03_watch"
 required-features = ["light-client"]
 
 [[test]]

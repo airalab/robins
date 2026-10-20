@@ -15,7 +15,7 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Scopes, grants and authorization on a local testnet.
+//! Step 7: scopes, grants and authorization on a local testnet.
 //!
 //! Ownership belongs to a *scope*, not to a node. The example:
 //!
@@ -26,15 +26,16 @@
 //!    what he may do (the library never decides authorization itself);
 //! 4. lets Bob write, and shows the typed error when he is not allowed to.
 //!
-//! Start a development node first (see `rpc_client_write`), then:
+//! Start a development node first (see `05_local_node_tree`), then:
 //!
 //! ```text
-//! cargo run -p libcps --example scope_access --no-default-features
+//! cargo run -p libcps --example 07_scope_access --no-default-features
 //! ```
 //!
 //! Environment: `ROBONOMICS_WS_URL` (default `ws://127.0.0.1:9944`) and
 //! `ROBONOMICS_SURI` (default `//Alice`, the scope owner).
 
+// ANCHOR: code
 use libcps::{
     crypto::{Signer, Sr25519},
     Capability, Cps, CreateNode, Error, Grant, NodeId,
@@ -154,3 +155,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+// ANCHOR_END: code

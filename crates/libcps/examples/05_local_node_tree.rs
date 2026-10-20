@@ -15,15 +15,16 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Send transactions to a locally running testnet over RPC.
+//! Step 5: create your own CPS tree on a local development node.
 //!
 //! Start a development chain first. There is no standalone node binary: in a checkout
-//! of `airalab/robonomics`, run the helper that starts the runtime with
-//! `polkadot-omni-node` (see "Running a Development Chain" in its
-//! `DEVELOPER_GUIDE.md`):
+//! of `airalab/robonomics`, build and run the development chain as a Docker image
+//! (see "Running a Development Chain" in its `DEVELOPER_GUIDE.md`):
 //!
 //! ```text
-//! nix develop -c ./scripts/development-chain.sh run
+//! nix develop -c ./scripts/development-chain.sh docker
+//! docker tag "$(docker images -q | head -n 1)" robonomics-dev
+//! docker run --rm -p 9944:9944 robonomics-dev
 //! ```
 //!
 //! The development node pre-funds `//Alice`, which this example uses by default.
@@ -31,13 +32,14 @@
 //! the nodes again.
 //!
 //! ```text
-//! cargo run -p libcps --example rpc_client_write --no-default-features
+//! cargo run -p libcps --example 05_local_node_tree --no-default-features
 //! ```
 //!
 //! Configuration (environment variables):
 //! - `ROBONOMICS_WS_URL` - node endpoint, default `ws://127.0.0.1:9944`;
 //! - `ROBONOMICS_SURI` - signer secret URI, default `//Alice`.
 
+// ANCHOR: code
 use libcps::{
     crypto::{Signer, Sr25519},
     Cps, CreateNode, IdentityAssignment,
@@ -123,3 +125,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Deleted nodes {child} and {root}");
     Ok(())
 }
+// ANCHOR_END: code

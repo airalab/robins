@@ -15,22 +15,23 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Build and validate CPS transactions offline.
+//! Step 4: build and validate CPS transactions offline.
 //!
 //! Transactions are plain prepared values: building one never touches the
 //! network and needs no signer. This example uses only the free function
 //! [`libcps::create_root`] and the [`CreateNode`] builder, so it runs without a
 //! chain; the node handles (`cps.node(id).set_payload(..)`, `grant`, `create_scope`,
-//! ...) build their transactions the same way, see `scope_access` and
-//! `address_identity`.
+//! ...) build their transactions the same way, see `07_scope_access` and
+//! `06_identity`.
 //!
 //! It shows size validation at build time, identity assignment parameters and how
 //! the transaction type carries its result type.
 //!
 //! ```text
-//! cargo run -p libcps --example offline_transactions --no-default-features
+//! cargo run -p libcps --example 04_offline_transactions --no-default-features
 //! ```
 
+// ANCHOR: code
 use libcps::{
     AccountId, CreateNode, Error, IdentityAssignment, IdentityPermit, NodeId, PermitSignature,
     Transaction, MAX_META_SIZE, MAX_PAYLOAD_SIZE,
@@ -77,3 +78,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("child creation with identity: {:?}", child_params.identity);
     Ok(())
 }
+// ANCHOR_END: code

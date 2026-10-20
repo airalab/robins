@@ -15,7 +15,7 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
-//! Encrypt and decrypt data offline with the `crypto` module.
+//! Step 8: encrypt and decrypt data offline with the `crypto` module.
 //!
 //! No chain connection is needed. The example shows, in order:
 //!
@@ -26,9 +26,10 @@
 //! 4. sender verification and tamper detection on decryption.
 //!
 //! ```text
-//! cargo run -p libcps --example crypto_roundtrip --no-default-features
+//! cargo run -p libcps --example 08_encryption --no-default-features
 //! ```
 
+// ANCHOR: code
 use libcps::crypto::{
     Cipher, Ed25519, EncryptedMessage, EncryptionAlgorithm, Scheme, Signer, Sr25519,
 };
@@ -118,3 +119,4 @@ fn kind(message: &EncryptedMessage) -> EncryptionAlgorithm {
         EncryptedMessage::V1 { algorithm, .. } => *algorithm,
     }
 }
+// ANCHOR_END: code
