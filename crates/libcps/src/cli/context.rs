@@ -17,7 +17,8 @@
 //! Per-invocation context shared by the command implementations.
 
 use super::{
-    args::{ConnectionArgs, ReadArgs},
+    args::ReadArgs,
+    config::{Config, EffectiveConfig, WaitPolicy},
     output::{self, hex0x, Output},
     target::Target,
 };
@@ -29,26 +30,41 @@ use libcps::{
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, IsTerminal, Write};
 
-/// Connection, signer and output settings of one invocation.
+/// Effective settings, signer and output of one invocation.
 pub struct Ctx {
-    /// Connection and key settings.
-    pub conn: ConnectionArgs,
+    /// Effective configuration (endpoint, output format, wait policy).
+    pub cfg: EffectiveConfig,
+    /// The parsed configuration file.
+    pub file: Config,
+    /// Account secret URI (`--suri`).
+    pub suri: Option<String>,
     /// Result renderer.
     pub out: Output,
 }
 
 impl Ctx {
+    /// Settings of the named profile alone, ignoring command-line and environment
+    /// overrides.
+    pub fn resolved_profile(&self, name: &str) -> Result<EffectiveConfig> {
+        let profile = self.file.profile(name)?;
+        Ok(EffectiveConfig::of_profile(
+            name,
+            profile,
+            self.cfg.config_path.clone(),
+        ))
+    }
+
     /// Connect to the chain, reporting progress on stderr.
     pub async fn cps(&self) -> Result<Cps> {
         output::progress("Connecting to blockchain...");
-        let cps = Cps::connect(&self.conn.ws_url).await?;
-        output::info(&format!("Connected to {}", self.conn.ws_url));
+        let cps = Cps::connect(&self.cfg.url).await?;
+        output::info(&format!("Connected to {}", self.cfg.url));
         Ok(cps)
     }
 
     /// SR25519 transaction signer from `--suri`; fails when none was supplied.
     pub fn signer(&self) -> Result<Signer<Sr25519>> {
-        let suri = self.conn.suri.as_deref().ok_or_else(|| {
+        let suri = self.suri.as_deref().ok_or_else(|| {
             anyhow!("this operation requires an account: provide --suri or set ROBONOMICS_SURI")
         })?;
         let signer = Signer::<Sr25519>::from_suri(suri)?;
@@ -58,7 +74,7 @@ impl Ctx {
 
     /// The `--suri` value, for encryption and decryption.
     pub fn suri(&self) -> Option<&str> {
-        self.conn.suri.as_deref()
+        self.suri.as_deref()
     }
 
     /// Read context: the block selected by `--at`, else the latest finalized block.
@@ -74,7 +90,8 @@ impl Ctx {
         target.node_id(&cps.finalized().await?).await
     }
 
-    /// Sign, submit and wait for finality, with a spinner on stderr.
+    /// Sign, submit and wait as the wait policy says (`best` or `finalized`),
+    /// with a spinner on stderr.
     pub async fn submit<T>(
         &self,
         cps: &Cps,
@@ -82,7 +99,14 @@ impl Ctx {
         signer: &Signer<Sr25519>,
     ) -> Result<TxReceipt<T>> {
         let spinner = output::spinner("Submitting transaction...");
-        let receipt = cps.submit_finalized(tx, signer).await;
+        let receipt = async {
+            let pending = cps.submit(tx, signer).await?;
+            match self.cfg.wait {
+                WaitPolicy::Finalized => pending.wait_finalized().await,
+                WaitPolicy::Best => pending.wait_in_block().await,
+            }
+        }
+        .await;
         spinner.finish_and_clear();
         Ok(receipt?)
     }

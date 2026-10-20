@@ -21,4 +21,6 @@ pub mod field;
 pub mod identity;
 pub mod nav;
 pub mod node;
+pub mod profile;
 pub mod scope;
+pub mod status;

@@ -22,10 +22,12 @@
 use clap::ValueEnum;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
+use serde::Deserialize;
 use serde_json::Value;
 
 /// Format of command results.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     /// Human-readable text.
     #[default]
@@ -74,6 +76,15 @@ impl Output {
 pub fn fields(rows: &[(&str, String)]) -> String {
     rows.iter()
         .map(|(label, value)| format!("{:<10} {value}", format!("{label}:")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Rows aligned on the longest label, for commands with long labels.
+pub fn wide_fields(rows: &[(&str, String)]) -> String {
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0) + 1;
+    rows.iter()
+        .map(|(label, value)| format!("{:<width$} {value}", format!("{label}:")))
         .collect::<Vec<_>>()
         .join("\n")
 }

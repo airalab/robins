@@ -16,22 +16,18 @@
 //
 //! Reusable `clap` argument groups shared by many commands.
 
-use super::{output::OutputFormat, target::parse_account};
+use super::{config::WaitPolicy, output::OutputFormat, target::parse_account};
 use clap::{Args, ValueEnum};
 use libcps::{AccountId, Hash};
 
 /// Connection and signer settings (global: accepted before or after the command).
 #[derive(Args, Clone, Debug)]
 pub struct ConnectionArgs {
-    /// WebSocket URL of a node RPC endpoint. Run `cps light-client` (`cps lc`) for a
-    /// local light client endpoint when no full node is available
-    #[arg(
-        long,
-        global = true,
-        env = "ROBONOMICS_WS_URL",
-        default_value = "ws://127.0.0.1:9944"
-    )]
-    pub ws_url: String,
+    /// WebSocket URL of a node RPC endpoint [env: ROBONOMICS_WS_URL] [default:
+    /// ws://127.0.0.1:9944, or the profile's `url`]. Run `cps light-client`
+    /// (`cps lc`) for a local light client endpoint when no full node is available
+    #[arg(long, global = true)]
+    pub ws_url: Option<String>,
 
     /// Account secret URI (e.g. //Alice or a seed phrase). Signs transactions
     /// (SR25519) and is the key for encryption and decryption
@@ -39,12 +35,32 @@ pub struct ConnectionArgs {
     pub suri: Option<String>,
 }
 
-/// Result format (global).
+/// Result format and transaction wait policy (global).
 #[derive(Args, Clone, Debug)]
 pub struct OutputArgs {
     /// Output format: `human` text or `json` (watches emit JSON Lines)
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Human)]
-    pub output: OutputFormat,
+    /// [env: CPS_OUTPUT] [default: human, or the profile's `output`]
+    #[arg(long, global = true, value_enum)]
+    pub output: Option<OutputFormat>,
+
+    /// How long to wait for a transaction: `best` (included in a best block) or
+    /// `finalized` [env: CPS_WAIT] [default: finalized, or the profile's `wait`]
+    #[arg(long, global = true, value_enum)]
+    pub wait: Option<WaitPolicy>,
+}
+
+/// Configuration file and profile selection (global).
+#[derive(Args, Clone, Debug)]
+pub struct ConfigArgs {
+    /// Configuration file (TOML) [env: CPS_CONFIG] [default:
+    /// $XDG_CONFIG_HOME/cps/config.toml]
+    #[arg(long, global = true, value_name = "FILE")]
+    pub config: Option<std::path::PathBuf>,
+
+    /// Profile of the configuration file [env: CPS_PROFILE] [default: the
+    /// file's `default-profile`]
+    #[arg(long, global = true, value_name = "NAME")]
+    pub profile: Option<String>,
 }
 
 /// Pinned-read selection; read commands only, writes never accept it.

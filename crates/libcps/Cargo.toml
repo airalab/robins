@@ -51,6 +51,7 @@ futures-util = { workspace = true, optional = true }
 clap = { workspace = true, features = ["env"], optional = true }
 colored = { workspace = true, optional = true }
 indicatif = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
 
 # Serialization
 serde.workspace = true
@@ -82,12 +83,21 @@ cli = [
   "dep:clap",
   "dep:colored",
   "dep:indicatif",
+  "dep:toml",
   "dep:tracing-subscriber",
 ]
+
+[dev-dependencies]
+tempfile.workspace = true
+assert_cmd.workspace = true
 
 [[example]]
 name = "light_client_read"
 required-features = ["light-client"]
+
+[[test]]
+name = "cli_profiles"
+required-features = ["cli"]
 
 [[test]]
 name = "light_node"

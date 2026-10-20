@@ -258,6 +258,59 @@ cps --ws-url ws://localhost:9944 \
     show 0
 ```
 
+### Profiles
+
+Recurring settings can be stored in a TOML file as named profiles. The default
+location is `$XDG_CONFIG_HOME/cps/config.toml` (`~/.config/cps/config.toml`;
+the platform configuration directory on other systems). Select another file with
+`--config FILE` or `CPS_CONFIG`. A missing default file is fine; a missing file
+requested explicitly is an error.
+
+```toml
+default-profile = "local"
+
+[profiles.local]
+url = "ws://127.0.0.1:9944"
+output = "human"
+wait = "finalized"
+
+[profiles.production]
+url = "wss://rpc.example.org"
+output = "json"
+wait = "finalized"
+```
+
+Profiles hold CLI settings only (`url`, `output`, `wait`). Never put secret
+phrases or keys in the file; unknown keys, `suri` included, are rejected.
+
+Every setting is resolved with one precedence, highest first: command-line option,
+environment variable, selected profile, built-in default. The profile itself is
+chosen by `--profile NAME`, then `CPS_PROFILE`, then `default-profile`.
+
+| Setting  | Option     | Variable           | Default                |
+| -------- | ---------- | ------------------ | ---------------------- |
+| endpoint | `--ws-url` | `ROBONOMICS_WS_URL` | `ws://127.0.0.1:9944` |
+| output   | `--output` | `CPS_OUTPUT`       | `human`                |
+| wait     | `--wait`   | `CPS_WAIT`         | `finalized`            |
+
+`wait` is `finalized` (until the block is finalized) or `best` (until the
+transaction is included in a best block, which a reorganization may still revert).
+
+```bash
+cps --profile production show 42
+cps profile list               # configured profiles, `yes` marks the default
+cps profile show [NAME]        # resolved settings, without connecting
+```
+
+### `status`
+
+`cps status` shows the effective configuration (profile, config file, RPC
+endpoint) and live chain information: name, genesis hash, runtime version, best
+and finalized blocks and whether the node is syncing (`unknown` if the endpoint
+does not say). It works the same against a full node, a remote RPC and `cps lc`.
+If the endpoint is unreachable the configuration is still printed and the exit
+status is 2. `cps --output json status` prints a machine-readable document.
+
 ## 📚 Library Usage
 
 ### Model

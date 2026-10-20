@@ -304,23 +304,80 @@ impl<T> PendingTransaction<T> {
             .wait_for_finalized()
             .await
             .map_err(Error::transaction)?;
+        Self::receipt(&self.tx, in_block).await
+    }
+
+    /// Wait until the transaction is included in a best block (finalized or not)
+    /// and successfully executed.
+    ///
+    /// The returned [`TxReceipt::block_hash`] is the including block, which may
+    /// still be reverted by a reorganization until it is finalized.
+    ///
+    /// # Errors
+    ///
+    /// As [`PendingTransaction::wait_finalized`].
+    pub async fn wait_in_block(mut self) -> Result<TxReceipt<T>> {
+        use subxt::{
+            error::{TransactionProgressError, TransactionStatusError},
+            transactions::TransactionStatus,
+        };
+        let in_block = loop {
+            let status = self
+                .progress
+                .next()
+                .await
+                .ok_or_else(|| {
+                    Error::transaction(
+                        TransactionProgressError::UnexpectedEndOfTransactionStatusStream,
+                    )
+                })?
+                .map_err(Error::transaction)?;
+            match status {
+                TransactionStatus::InBestBlock(block)
+                | TransactionStatus::InFinalizedBlock(block) => {
+                    break block;
+                }
+                TransactionStatus::Error { message } => {
+                    return Err(Error::transaction(TransactionStatusError::Error(message)));
+                }
+                TransactionStatus::Invalid { message } => {
+                    return Err(Error::transaction(TransactionStatusError::Invalid(message)));
+                }
+                TransactionStatus::Dropped { message } => {
+                    return Err(Error::transaction(TransactionStatusError::Dropped(message)));
+                }
+                _ => {}
+            }
+        };
+        Self::receipt(&self.tx, in_block).await
+    }
+
+    /// Receipt of a transaction included in `in_block`, once its events report success.
+    async fn receipt(
+        tx: &Transaction<T>,
+        in_block: subxt::transactions::TransactionInBlock<
+            robonomics_runtime_subxt_api::RobonomicsConfig,
+            subxt::client::OnlineClientAtBlockImpl<robonomics_runtime_subxt_api::RobonomicsConfig>,
+        >,
+    ) -> Result<TxReceipt<T>> {
         let block_hash = in_block.block_hash();
         let extrinsic_hash = in_block.extrinsic_hash();
         let events = in_block.wait_for_success().await.map_err(Error::outcome)?;
         Ok(TxReceipt {
             extrinsic_hash,
             block_hash,
-            result: self.tx.decode_result(&events)?,
+            result: tx.decode_result(&events)?,
         })
     }
 }
 
-/// Outcome of a finalized transaction.
+/// Outcome of a successfully executed transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TxReceipt<T> {
     /// Hash of the extrinsic.
     pub extrinsic_hash: Hash,
-    /// Hash of the finalized block that includes the extrinsic.
+    /// Hash of the block that includes the extrinsic: finalized, unless the
+    /// transaction was awaited with [`PendingTransaction::wait_in_block`].
     pub block_hash: Hash,
     /// Semantic result: the created [`NodeId`](crate::NodeId) /
     /// [`ScopeId`](crate::ScopeId), or `()`.

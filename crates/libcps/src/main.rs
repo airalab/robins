@@ -26,15 +26,18 @@ use std::{io::IsTerminal, process::ExitCode};
 mod cli;
 
 use cli::{
-    args::{ConnectionArgs, OutputArgs},
+    args::{ConfigArgs, ConnectionArgs, OutputArgs},
     commands::{
         access::{self, AccessCommand},
         field::{self, Field, FieldCommand},
         identity::{self, IdentityCommand},
         nav::{self, NavArgs, ShowArgs, TreeArgs},
         node::{self, CreateArgs, DeleteArgs},
+        profile::{self, ProfileCommand},
         scope::{self, ScopeCommand},
+        status,
     },
+    config::{self, CliSettings},
     context::Ctx,
     light_client,
     output::Output,
@@ -66,6 +69,9 @@ struct Cli {
 
     #[command(flatten)]
     output: OutputArgs,
+
+    #[command(flatten)]
+    config: ConfigArgs,
 
     /// Log filter: a level (off, error, warn, info, debug, trace) or tracing
     /// directives such as `info,subxt=warn`
@@ -121,6 +127,22 @@ enum Command {
     Access {
         #[command(subcommand)]
         command: AccessCommand,
+    },
+    /// Show the effective configuration and the live state of the connected chain
+    #[command(
+        long_about = "Show the profile, config file and RPC endpoint the CLI resolved
+(command line > environment > profile > built-in defaults), then query the
+endpoint for the chain name, genesis hash, runtime version, best and finalized
+blocks and the synchronization state. The effective configuration is shown even
+when the endpoint cannot be reached; the exit status is then 2.
+
+Works the same against a full node, a remote RPC service and `cps lc`."
+    )]
+    Status,
+    /// Configuration profiles
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommand,
     },
     /// Run the embedded light client as a local JSON-RPC endpoint
     #[command(
@@ -181,9 +203,18 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<ExitCode> {
+    let resolved = config::resolve_from_env(CliSettings {
+        config: cli.config.config,
+        profile: cli.config.profile,
+        url: cli.connection.ws_url,
+        output: cli.output.output,
+        wait: cli.output.wait,
+    })?;
     let ctx = Ctx {
-        conn: cli.connection,
-        out: Output::new(cli.output.output),
+        out: Output::new(resolved.effective.output),
+        cfg: resolved.effective,
+        file: resolved.file,
+        suri: cli.connection.suri,
     };
     let ctx = &ctx;
     match cli.command {
@@ -198,6 +229,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Identity { command } => identity::run(ctx, command).await?,
         Command::Scope { command } => scope::run(ctx, command).await?,
         Command::Access { command } => return access::run(ctx, command).await,
+        Command::Status => return status::run(ctx).await,
+        Command::Profile { command } => profile::run(ctx, command)?,
         Command::LightClient(args) => {
             light_client::execute(light_client::node_config(&args.listen, args.allow_external))
                 .await?
@@ -242,11 +275,43 @@ mod tests {
     }
 
     #[test]
-    fn ws_url_defaults_to_the_light_client_endpoint() {
+    fn ws_url_is_unset_unless_given() {
+        assert_eq!(parse(&["show", "0"]).connection.ws_url, None);
         assert_eq!(
-            parse(&["show", "0"]).connection.ws_url,
-            "ws://127.0.0.1:9944"
+            parse(&["--ws-url", "ws://h:1", "show", "0"])
+                .connection
+                .ws_url,
+            Some("ws://h:1".into())
         );
+    }
+
+    #[test]
+    fn config_selection_options_are_global() {
+        let cli = parse(&[
+            "status",
+            "--profile",
+            "dev",
+            "--config",
+            "c.toml",
+            "--wait",
+            "best",
+        ]);
+        assert_eq!(cli.config.profile.as_deref(), Some("dev"));
+        assert_eq!(cli.config.config, Some("c.toml".into()));
+        assert_eq!(cli.output.wait, Some(config::WaitPolicy::Best));
+    }
+
+    #[test]
+    fn profile_and_status_commands_parse() {
+        assert!(matches!(parse(&["status"]).command, Command::Status));
+        assert!(matches!(
+            parse(&["profile", "list"]).command,
+            Command::Profile { .. }
+        ));
+        assert!(matches!(
+            parse(&["profile", "show", "dev"]).command,
+            Command::Profile { .. }
+        ));
     }
 
     #[test]
@@ -264,6 +329,7 @@ mod tests {
         let a = parse(&["--output", "json", "show", "42"]);
         let b = parse(&["show", "42", "--output", "json"]);
         assert!(a.output.output == b.output.output);
+        assert_eq!(a.output.output, Some(cli::output::OutputFormat::Json));
     }
 
     #[test]

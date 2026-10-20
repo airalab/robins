@@ -19,6 +19,7 @@
 
 pub mod args;
 pub mod commands;
+pub mod config;
 pub mod context;
 pub mod data;
 pub mod light_client;
