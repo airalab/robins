@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Reusable `clap` argument groups shared by many commands.
 
 use super::{config::WaitPolicy, output::OutputFormat, target::parse_account};

@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Identity permits: the signing payload and a portable signed artifact.
 //!
 //! An identity account consents to be used as the identity of nodes in a scope

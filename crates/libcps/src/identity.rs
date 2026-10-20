@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Identity keys: generation, inspection and signing for identity permits.
 //!
 //! An identity account may use any signature scheme the runtime accepts for

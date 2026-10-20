@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! `access` commands: check, grant and revoke capabilities in a scope.
 
 use crate::cli::{

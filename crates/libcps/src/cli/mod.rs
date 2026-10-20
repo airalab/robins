@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Command-line interface of `cps`: shared argument types, target handling,
 //! output rendering and the command implementations.
 

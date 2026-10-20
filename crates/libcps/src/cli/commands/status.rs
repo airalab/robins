@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! `cps status`: effective configuration plus live chain information.
 //!
 //! The chain is queried with plain JSON-RPC requests, so a full node, a remote RPC

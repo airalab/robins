@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Output rendering: results on stdout (human text or JSON), diagnostics on stderr.
 //!
 //! Keeping diagnostics off stdout leaves stdout clean for JSON, JSON Lines and

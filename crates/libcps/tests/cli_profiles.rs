@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Black-box tests of the `cps` profile commands and `cps status`.
 //!
 //! No live chain is needed: `status` talks to a tiny in-process JSON-RPC

@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! Navigation commands: `show`, `tree`, `parent` and `children`.
 //!
 //! The target selects the projection: a node target answers in `NodeId`

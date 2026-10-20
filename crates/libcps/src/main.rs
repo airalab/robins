@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! CPS CLI - command-line interface for the Robonomics CPS pallet.
 //!
 //! Commands operate on CPS resources addressed by a common `<TARGET>`: a numeric

@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! CLI configuration: the TOML config file, named profiles and the resolution of
 //! the effective settings.
 //!

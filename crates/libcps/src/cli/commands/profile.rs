@@ -14,6 +14,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
+///////////////////////////////////////////////////////////////////////////////
 //! `cps profile`: inspect the configured profiles. Never connects to the chain.
 
 use crate::cli::{
