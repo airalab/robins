@@ -192,23 +192,6 @@ async fn historical_reads_are_block_consistent() {
 
 #[tokio::test]
 #[ignore = "requires a live dev node"]
-async fn scope_replacement_yields_fresh_scope_id() {
-    let cps = connect().await;
-    let alice = keypair("//Alice");
-    let node = create(&cps, &alice, None).await;
-
-    let first = cps.node(node).resolve_scope().await.unwrap();
-    cps.submit_finalized(&cps.node(node).replace_scope(), &alice)
-        .await
-        .unwrap();
-    let second = cps.node(node).resolve_scope().await.unwrap();
-
-    assert_eq!(second.root, first.root);
-    assert_ne!(second.id, first.id);
-}
-
-#[tokio::test]
-#[ignore = "requires a live dev node"]
 async fn grants_in_node_and_subtree_modes_and_revoke() {
     let cps = connect().await;
     let alice = keypair("//Alice");

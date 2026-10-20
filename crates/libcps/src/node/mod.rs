@@ -179,19 +179,9 @@ impl<'a> Node<'a> {
     /// Make the node the root of a new scope owned by the signer.
     ///
     /// Submitting fails with [`Error::ScopeAlreadyExists`](crate::Error::ScopeAlreadyExists)
-    /// if the node is already a scope root: replacing a scope is destructive
-    /// and must be requested explicitly with [`Node::replace_scope`].
+    /// if the node is already a scope root.
     pub fn create_scope(&self) -> Transaction<ScopeId> {
         transaction::create_scope(self.id)
-    }
-
-    /// Replace the scope rooted at the node by a new one, dropping its access
-    /// entries.
-    ///
-    /// Unlike [`Node::create_scope`] this does not refuse a node that already
-    /// is a scope root.
-    pub fn replace_scope(&self) -> Transaction<ScopeId> {
-        transaction::replace_scope(self.id)
     }
 
     /// Grant `account` the `grant` at the node.
@@ -321,7 +311,6 @@ mod tests {
             let _: Transaction<()> = node.clear_payload();
             let _: Transaction<()> = node.delete();
             let _: Transaction<ScopeId> = node.create_scope();
-            let _: Transaction<ScopeId> = node.replace_scope();
             let _: Transaction<NodeId> = node.create_child(CreateNode::new()).unwrap();
             let account = AccountId::from([1u8; 32]);
             let _: Transaction<()> = node.grant(account, Grant::write_subtree()).unwrap();
@@ -334,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn create_scope_is_guarded_and_replace_scope_is_not() {
+    fn create_scope_is_guarded() {
         use crate::transaction::{self, Precondition};
 
         let id = NodeId::from(3);
@@ -342,7 +331,6 @@ mod tests {
             transaction::create_scope(id).precondition,
             Some(Precondition::NotScopeRoot(id))
         );
-        assert_eq!(transaction::replace_scope(id).precondition, None);
     }
 
     #[test]

@@ -271,7 +271,7 @@ Things to notice:
 
 ## 6. Scopes and access: `scope_access`
 
-**Teaches:** `resolve_scope`, `create_scope` vs `replace_scope`, `grant`/`revoke`, `Grant`,
+**Teaches:** `resolve_scope`, `create_scope`, `grant`/`revoke`, `Grant`,
 `has_capability`, typed authorization errors.
 
 Ownership in CPS belongs to a *scope*, not to a node. A scope is rooted at a node and owned by one
@@ -289,10 +289,8 @@ let node = cps.node(room);
 let scope = node.resolve_scope().await?;           // id, root, owner, path
 let record = cps.scope(scope.id).info().await?;    // owner, access_count
 
-// Nested scope. Refused if the node already roots one ...
+// Nested scope. Refused if the node already roots one
 let id = cps.submit_finalized(&node.create_scope(), &owner).await?.result;
-// ... replacing is destructive, so it has its own explicit call
-let id = cps.submit_finalized(&node.replace_scope(), &owner).await?.result;
 
 // Grants: Node mode = this node only, Subtree mode = also descendants in the same scope
 cps.submit_finalized(&node.grant(bob, Grant::write_subtree())?, &owner).await?;
@@ -302,9 +300,8 @@ cps.submit_finalized(&node.revoke(bob, Capability::Write)?, &owner).await?;
 
 Things to notice:
 
-- `create_scope` fails with `Error::ScopeAlreadyExists` on an existing scope root. Use
-  `replace_scope` when you really mean it: it gives the node a fresh `ScopeId` and drops the old
-  access entries. The guard is checked when the transaction is submitted, so it is a best-effort
+- `create_scope` fails with `Error::ScopeAlreadyExists` on an existing scope root. The guard is
+  checked when the transaction is submitted, so it is a best-effort
   safeguard, not an atomic runtime check.
 - `Grant` pairs a `Capability` (`Write`, `CreateScope`) with a `GrantMode` (`Node`, `Subtree`);
   shortcuts: `Grant::write_node()`, `Grant::write_subtree()`, `Grant::create_scope_node()`,
@@ -410,7 +407,7 @@ Ordered like the tutorial, from the most used to the most advanced.
 | Send | `cps.submit_finalized(&tx, &signer)`, `cps.submit(&tx, &signer)` + `wait_finalized()` |
 | Encrypt | `signer.encrypt(data, &receiver_public, algorithm)`, `receiver.decrypt(&msg, Some(&sender_public))` |
 | Follow changes | `node.watch_payload()`, `node.watch_meta()` |
-| Scope | `node.resolve_scope()`, `cps.scope(id).info()`, `create_scope()`, `replace_scope()` |
+| Scope | `node.resolve_scope()`, `cps.scope(id).info()`, `create_scope()` |
 | Access | `node.grant(account, Grant::..)`, `revoke(account, cap)`, `has_capability(&account, cap)` |
 | Identity | `CreateNode::identity(..)`, `set_identity(..)`, `clear_identity()`, `node.identity()` |
 | By account | `cps.address(account).node_id() / parent() / children() / payload() / scope_id()` |

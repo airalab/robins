@@ -409,7 +409,7 @@ async fn main() -> libcps::Result<()> {
 | Handle | Methods |
 | --- | --- |
 | `Node` (reads) | `info`, `parent`, `children`, `meta`, `payload`, `identity`, `snapshot`, `resolve_scope`, `has_capability`, `watch_meta`, `watch_payload` |
-| `Node` (transactions) | `create_child`, `delete`, `set_meta`, `clear_meta`, `set_payload`, `clear_payload`, `create_scope`, `replace_scope`, `grant`, `revoke`, `set_identity`, `clear_identity` (and the free function `create_root`) |
+| `Node` (transactions) | `create_child`, `delete`, `set_meta`, `clear_meta`, `set_payload`, `clear_payload`, `create_scope`, `grant`, `revoke`, `set_identity`, `clear_identity` (and the free function `create_root`) |
 | `Address` (reads only) | `node_id`, `parent`, `children`, `meta`, `payload`, `scope_id`, `has_capability` |
 | `Scope` | `info` |
 | `CpsAt` | `block_hash`, `node`, `address`, `scope`; `NodeAt`, `AddressAt` and `ScopeAt` have the read methods of their handles |
@@ -502,10 +502,6 @@ let scope_info = cps.scope(resolved.id).info().await?;
 // Make the node the root of a new nested Scope. This refuses (Error::ScopeAlreadyExists)
 // a node that already roots a Scope.
 let scope_id = cps.submit_finalized(&node.create_scope(), &keypair).await?.result;
-
-// Replacing an existing Scope with a fresh ScopeId, which is how ownership
-// changes, must be explicit: it drops the Scope's access entries.
-let scope_id = cps.submit_finalized(&node.replace_scope(), &keypair).await?.result;
 
 // Let `bob` write to this node and its descendants in the same Scope
 cps.submit_finalized(&node.grant(bob, Grant::write_subtree())?, &keypair).await?;

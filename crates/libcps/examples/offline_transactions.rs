@@ -20,7 +20,7 @@
 //! Transactions are plain prepared values: building one never touches the
 //! network and needs no signer. This example uses only the free function
 //! [`libcps::create_root`] and the [`CreateNode`] builder, so it runs without a
-//! chain; the node handles (`cps.node(id).set_payload(..)`, `grant`, `replace_scope`,
+//! chain; the node handles (`cps.node(id).set_payload(..)`, `grant`, `create_scope`,
 //! ...) build their transactions the same way, see `scope_access` and
 //! `address_identity`.
 //!

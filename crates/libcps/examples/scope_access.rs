@@ -20,9 +20,8 @@
 //! Ownership belongs to a *scope*, not to a node. The example:
 //!
 //! 1. creates a tree and shows the scope its nodes resolve to;
-//! 2. makes a nested scope with `create_scope`, shows that `create_scope` refuses a
-//!    node that already roots a scope and uses `replace_scope` to replace it
-//!    explicitly;
+//! 2. makes a nested scope with `create_scope`, and shows that `create_scope`
+//!    refuses a node that already roots a scope;
 //! 3. grants `//Bob` capabilities in `Node` and `Subtree` mode and asks the runtime
 //!    what he may do (the library never decides authorization itself);
 //! 4. lets Bob write, and shows the typed error when he is not allowed to.
@@ -92,12 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         other => println!("unexpected: {:?}", other.map(|r| r.result)),
     }
-    // Replacing is allowed, but must be asked for explicitly: it drops access entries.
-    let replaced = cps
-        .submit_finalized(&cps.node(room).replace_scope(), &owner)
-        .await?
-        .result;
-    println!("room {room}: scope {nested} replaced by {replaced}");
 
     // Bob has no rights yet; the runtime is the source of truth.
     let bob_id = bob.account_id();

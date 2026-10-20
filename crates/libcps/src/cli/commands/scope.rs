@@ -14,17 +14,13 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
-//! `scope` commands: resolve, create, replace and show.
+//! `scope` commands: resolve, create and show.
 //!
 //! Scope data is expressed in `NodeId` space whatever form the target has:
 //! a scope root need not have an identity.
 
 use crate::cli::{
-    args::ReadArgs,
-    commands::nav::NavArgs,
-    context::{confirm, Ctx},
-    output::{fields, info},
-    target::Target,
+    args::ReadArgs, commands::nav::NavArgs, context::Ctx, output::fields, target::Target,
 };
 use anyhow::Result;
 use clap::{Args, Subcommand};
@@ -38,8 +34,6 @@ pub enum ScopeCommand {
     Resolve(NavArgs),
     /// Make a node the root of a new scope, refusing an existing scope root
     Create(CreateArgs),
-    /// Replace the scope rooted at a node, destroying its access entries
-    Replace(ReplaceArgs),
     /// Show a scope record by id
     Show(ShowArgs),
 }
@@ -50,30 +44,11 @@ pub enum ScopeCommand {
 
 The command refuses a node that already roots a scope, but that is a
 client-side check against the finalized state: another transaction may create
-or replace the scope before this one is included, so it is NOT an atomic
-create-if-absent. Use `scope replace` to replace a scope deliberately.")]
+the scope before this one is included, so it is NOT an atomic
+create-if-absent.")]
 pub struct CreateArgs {
     /// Node id or identity account
     pub target: Target,
-}
-
-/// Arguments of `scope replace`.
-#[derive(Args, Debug)]
-#[command(long_about = "Replace the scope rooted at TARGET by a new one.
-
-DESTRUCTIVE: the existing scope's access entries are removed. Asks for
-confirmation unless --yes is given.
-
-EXAMPLES:
-    cps scope replace 42
-    cps scope replace 42 --yes")]
-pub struct ReplaceArgs {
-    /// Node id or identity account
-    pub target: Target,
-
-    /// Do not ask for confirmation
-    #[arg(short = 'y', long)]
-    pub yes: bool,
 }
 
 /// Arguments of `scope show`.
@@ -91,7 +66,6 @@ pub async fn run(ctx: &Ctx, command: ScopeCommand) -> Result<()> {
     match command {
         ScopeCommand::Resolve(args) => resolve(ctx, args).await,
         ScopeCommand::Create(args) => create(ctx, args).await,
-        ScopeCommand::Replace(args) => replace(ctx, args).await,
         ScopeCommand::Show(args) => show(ctx, args).await,
     }
 }
@@ -126,33 +100,13 @@ async fn create(ctx: &Ctx, args: CreateArgs) -> Result<()> {
     let id = ctx.canonical(&cps, &args.target).await?;
     let receipt = ctx
         .submit(&cps, &cps.node(id).create_scope(), &signer)
-        .await?;
-    let scope = receipt.result;
-    ctx.done(
-        &receipt,
-        format!("Node {id} now roots scope {scope}"),
-        json!({ "node": id.0, "scope": scope.0 }),
-    );
-    Ok(())
-}
-
-async fn replace(ctx: &Ctx, args: ReplaceArgs) -> Result<()> {
-    let cps = ctx.cps().await?;
-    let signer = ctx.signer()?;
-    let id = ctx.canonical(&cps, &args.target).await?;
-    let node = cps.node(id);
-
-    let question = match node.info().await?.and_then(|info| info.scope) {
-        Some(scope) => format!(
-            "Node {id} already roots scope {scope}.\nReplacing it will remove the existing scope access entries.\nContinue?"
-        ),
-        None => format!("Node {id} roots no scope yet. Replace (create) one?"),
-    };
-    if !confirm(&question, args.yes)? {
-        info("Replacement cancelled");
-        return Ok(());
-    }
-    let receipt = ctx.submit(&cps, &node.replace_scope(), &signer).await?;
+        .await
+        .map_err(|e| match e.downcast_ref::<libcps::Error>() {
+            Some(libcps::Error::ScopeAlreadyExists(id)) => {
+                anyhow::anyhow!("node {id} is already a scope root")
+            }
+            _ => e,
+        })?;
     let scope = receipt.result;
     ctx.done(
         &receipt,

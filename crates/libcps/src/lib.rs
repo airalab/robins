@@ -126,9 +126,8 @@
 //!     cps.submit_finalized(&tx, &keypair).await?;
 //! }
 //!
-//! // `create_scope` refuses a node that already roots a scope; `replace_scope`
-//! // replaces it explicitly.
-//! let scope = cps.submit_finalized(&node.replace_scope(), &keypair).await?.result;
+//! // `create_scope` refuses a node that already roots a scope.
+//! let scope = cps.submit_finalized(&node.create_scope(), &keypair).await?.result;
 //!
 //! cps.submit_finalized(&node.clear_identity(), &keypair).await?;
 //! # let _ = scope;
