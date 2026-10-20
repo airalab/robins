@@ -108,11 +108,11 @@ The encryption scheme uses HKDF (RFC 5869) for deriving encryption keys from sha
 3. **HKDF Expand**
    ```
    info = algorithm-specific string:
-     - "robonomics-cps-xchacha20poly1305"
-     - "robonomics-cps-aesgcm256"
-     - "robonomics-cps-chacha20poly1305"
+     - "xchacha20poly1305"
+     - "aesgcm256"
+     - "chacha20poly1305"
    
-   OKM = HMAC-SHA256(PRK, info)[0..32]
+   OKM = HMAC-SHA256(PRK, info || 0x01)[0..32]
    ```
 
 ### Security Properties:
