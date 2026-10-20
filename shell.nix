@@ -37,8 +37,11 @@ mkShell.override { stdenv = clangStdenv; } {
   packages =
     packages
     ++ [
-      llvmPackages.lld
-      rust-toolchain
+      cargo
+      rustc
+      rustfmt
+      clippy
+      rust-analyzer
     ];
   env = {
     PROTOC = "${lib.makeBinPath [ protobuf ]}/protoc";

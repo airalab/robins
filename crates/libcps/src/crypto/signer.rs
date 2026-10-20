@@ -19,8 +19,8 @@
 
 use super::scheme::Scheme;
 use crate::{error::Error, types::AccountId};
+use polkadot_sdk::sp_core::{ByteArray, Pair};
 use robonomics_runtime_subxt_api::{MultiSignature, RobonomicsConfig};
-use sp_core::{ByteArray, Pair};
 use std::{fmt, marker::PhantomData};
 
 /// Public key of the scheme `S`.
@@ -203,7 +203,7 @@ impl<S: Scheme> fmt::Debug for Signer<S> {
 mod tests {
     use super::*;
     use crate::crypto::{Ed25519, Sr25519};
-    use sp_core::{ed25519, sr25519};
+    use polkadot_sdk::sp_core::{ed25519, sr25519};
     use subxt::transactions::Signer as _;
 
     #[test]

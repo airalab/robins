@@ -19,10 +19,12 @@
 
 use crate::{
     address::{Address, AddressAt},
+    api,
     backend::{self, Api, At},
     crypto::{Scheme, Signer},
     error::{Error, Result},
     node::{Node, NodeAt},
+    permit::IdentityPermitPayload,
     scope::{Scope, ScopeAt},
     transaction::{Precondition, Progress, Transaction},
     types::{AccountId, Hash, NodeId, ScopeId},
@@ -158,6 +160,49 @@ impl Cps {
         self.submit(tx, signer).await?.wait_finalized().await
     }
 
+    /// Genesis hash of the chain, which binds identity permits to it.
+    pub fn genesis_hash(&self) -> Hash {
+        self.client.genesis_hash()
+    }
+
+    /// Payload an identity account signs to issue a permit for `scope`, valid
+    /// until the block `valid_until`.
+    ///
+    /// The payload is built from the chain context (genesis hash) and the
+    /// runtime limits, so the signing bytes are exactly what the runtime
+    /// verifies. Signing is separate: use [`IdentityPermitPayload::sign`] or
+    /// sign [`IdentityPermitPayload::signing_bytes`] elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Crypto`] if `valid_until` is already past or further ahead than
+    /// the runtime allows (relative to the latest finalized block), because the
+    /// permit would be unusable.
+    pub async fn identity_permit_payload(
+        &self,
+        scope: ScopeId,
+        valid_until: u32,
+    ) -> Result<IdentityPermitPayload> {
+        let at = self.finalized().await?;
+        let now = at.block_number();
+        let ttl = at.max_identity_permit_ttl()?;
+        if valid_until < now {
+            return Err(Error::Crypto(format!(
+                "permit validity {valid_until} is before the current block {now}"
+            )));
+        }
+        if u64::from(valid_until) > u64::from(now) + u64::from(ttl) {
+            return Err(Error::Crypto(format!(
+                "permit validity {valid_until} exceeds the runtime limit: at most {ttl} blocks after block {now}"
+            )));
+        }
+        Ok(IdentityPermitPayload {
+            genesis_hash: self.genesis_hash(),
+            scope,
+            valid_until,
+        })
+    }
+
     /// Verify the client-side intent of `tx` against the finalized state.
     async fn check_precondition<T>(&self, tx: &Transaction<T>) -> Result<()> {
         match tx.precondition {
@@ -196,6 +241,20 @@ impl CpsAt {
     /// Hash of the block all reads use.
     pub fn block_hash(&self) -> Hash {
         self.at.block_hash()
+    }
+
+    /// Number of the block all reads use.
+    pub fn block_number(&self) -> u32 {
+        u32::try_from(self.at.block_number()).unwrap_or(u32::MAX)
+    }
+
+    /// Maximum number of blocks an identity permit may be valid ahead of the
+    /// current block (`MaxIdentityPermitTtl` runtime constant).
+    pub fn max_identity_permit_ttl(&self) -> Result<u32> {
+        self.at
+            .constants()
+            .entry(api::constants().cps().max_identity_permit_ttl())
+            .map_err(Error::runtime)
     }
 
     /// Handle to the node `id` at this block.

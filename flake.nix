@@ -18,9 +18,6 @@
     systems.url = "github:nix-systems/default";
     nixpkgs.url = "github:NixOS/nixpkgs/8edc0c72e3a38faf5434e40d1f19431125fe4b30";
 
-    fenix.url = "github:nix-community/fenix/cf67babe5be61cdcd6d83b4ed5e12088146f3917";
-    fenix.inputs.nixpkgs.follows = "nixpkgs";
-
     polkadot.url = "github:andresilva/polkadot.nix";
     polkadot.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -35,15 +32,7 @@
       ...
     }:
     let 
-      mkPkgs = system: nixpkgs.legacyPackages.${system}.appendOverlays [
-        polkadot.overlays.default
-        (final: prev: {
-          rust-toolchain = fenix.packages.${system}.fromToolchainFile { 
-            file = ./rust-toolchain.toml;
-            sha256 = "sha256-SBKjxhC6zHTu0SyJwxLlQHItzMzYZ71VCWQC2hOzpRY=";
-          };
-        })
-      ];
+      mkPkgs = system: nixpkgs.legacyPackages.${system}.appendOverlays [polkadot.overlays.default];
       eachSystem = f: nixpkgs.lib.genAttrs (import systems) (system: f system (mkPkgs system));
     in {
       checks = eachSystem (
@@ -64,7 +53,7 @@
           default = self.lib.${system}.mkDevShell {
             packages = with pkgs; [
               taplo actionlint cargo-nextest cargo-audit cargo-machete
-              psvm pkgs.polkadot polkadot-parachain polkadot-omni-node
+              pkgs.polkadot polkadot-parachain polkadot-omni-node
             ];
             env.RUSTC_WRAPPER = pkgs.lib.getExe pkgs.sccache;
           }; 

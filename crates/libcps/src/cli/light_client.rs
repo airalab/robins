@@ -17,7 +17,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 //! `cps light-client`: run the embedded light client as a local RPC endpoint.
 
-use crate::display;
+use super::output as display;
 use anyhow::Result;
 use libcps::light::{LightNode, LightNodeConfig, LightStatus};
 

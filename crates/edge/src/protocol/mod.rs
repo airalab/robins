@@ -86,13 +86,13 @@ pub mod sensor_message {
     pub use crate::protocol::generated::core::v1::{message::Payload, Message, Meta};
 }
 
-pub use sp_core::crypto::AccountId32;
+pub use polkadot_sdk::sp_core::crypto::AccountId32;
 
+use polkadot_sdk::sp_core::crypto::{Pair as _, Ss58AddressFormat, Ss58Codec};
+use polkadot_sdk::sp_core::ed25519::{Pair, Public, Signature};
 use prost::Message;
 use rand::Rng;
 use sha2::{Digest, Sha256};
-use sp_core::crypto::{Pair as _, Ss58AddressFormat, Ss58Codec};
-use sp_core::ed25519::{Pair, Public, Signature};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -340,7 +340,7 @@ impl SensorIdentity {
     /// 64-digit hex secret seed, or a BIP-39 recovery phrase, optionally
     /// followed by `//hard` / `/soft` derivation junctions and a `///password`.
     /// A hex seed without the `0x` prefix is rejected (interpreted, and
-    /// failing, as a BIP-39 phrase). See [`sp_core::crypto::Pair::from_string`]
+    /// failing, as a BIP-39 phrase). See [`polkadot_sdk::sp_core::crypto::Pair::from_string`]
     /// for the full grammar.
     pub fn from_suri(suri: &str) -> Result<Self, ProtocolError> {
         Pair::from_string(suri.trim(), None)

@@ -29,7 +29,7 @@ required-features = ["cli"]
 [dependencies]
 # Blockchain
 subxt.workspace = true
-sp-core.workspace = true
+polkadot-sdk.workspace = true
 parity-scale-codec.workspace = true
 robonomics-runtime-subxt-api.workspace = true
 robonomics-chain-spec = { workspace = true, optional = true }
@@ -77,7 +77,13 @@ light-client = [
   "dep:robonomics-chain-spec",
 ]
 # The `cps` binary always includes the light client (`cps light-client`).
-cli = ["light-client", "clap", "colored", "indicatif", "tracing-subscriber"]
+cli = [
+  "light-client",
+  "dep:clap",
+  "dep:colored",
+  "dep:indicatif",
+  "dep:tracing-subscriber",
+]
 
 [[example]]
 name = "light_client_read"
