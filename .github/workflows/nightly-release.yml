@@ -1,0 +1,71 @@
+name: Nightly Release
+permissions:
+  contents: read
+
+# Publishes a pre-release with ready-to-use archives when a tag like
+# `nightly-2610.1` (nightly-<YYMM>.<N>) is pushed.
+on:
+  push:
+    tags:
+    - 'nightly-[0-9][0-9][0-9][0-9].[0-9]*'
+
+concurrency:
+  group: nightly-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    uses: ./.github/workflows/nightly.yml
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+  publish:
+    name: Publish ${{ github.ref_name }}
+    needs: nightly
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '{linux,macos}-*'
+          path: artifacts
+
+      - name: Package archives
+        run: |
+          mkdir -p dist
+          for dir in artifacts/*; do
+            platform=$(basename "$dir")   # e.g. linux-x86_64
+            name="robins-${TAG}-${platform}"
+            mkdir -p "stage/${name}"
+            cp "$dir"/{cps,mqtt-bridge,edge} LICENSE "stage/${name}/"
+            chmod +x "stage/${name}"/{cps,mqtt-bridge,edge}
+            # Flat layout: `curl ... | tar -xz` unpacks binaries into the cwd
+            tar -C "stage/${name}" -czf "dist/${name}.tar.gz" .
+          done
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+          ls -l dist
+          cat dist/SHA256SUMS
+
+      - name: Render release notes
+        run: |
+          ./.github/scripts/nightly-release-notes.sh "$TAG" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > notes.md
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" --jq .body >> notes.md
+
+      - name: Create pre-release
+        run: |
+          gh release create "$TAG" dist/* \
+            --verify-tag \
+            --prerelease \
+            --title "Nightly ${TAG#nightly-}" \
+            --notes-file notes.md

@@ -7,7 +7,7 @@
 
 rustPlatform.buildRustPackage {
   pname = "libcps";
-  version = "0.4.0";
+  version = "0.8.0";
 
   cargoLock.lockFile = ../../../Cargo.lock;
   src = lib.cleanSource ../../..;

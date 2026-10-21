@@ -15,6 +15,8 @@ airalab/robonomics        airalab/robins
   chain specs               service tooling
 ```
 
+> Download the latest build from the [Releases](https://github.com/airalab/robins/releases).
+
 ## Repository Structure
 
 This repository is organized as a Cargo workspace with the following structure:
@@ -43,9 +45,7 @@ This repository is organized as a Cargo workspace with the following structure:
 
 - **`nix/`** - Nix flake modules and build configurations
 - **`scripts/`** - Build, deployment, and testing scripts
-  - `build-deb.sh` - Debian package builder
   - `build-static.sh` - Build statically linked binaries (for docker and portability)
-  - `try-runtime.sh` - Runtime upgrade checks
 
 ## Contributing
 
