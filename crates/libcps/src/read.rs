@@ -24,10 +24,14 @@
 use crate::{
     api::{self, runtime_types::pallet_robonomics_cps as rt},
     backend::At,
-    error::{Error, Result},
+    error::{Error, Result, Source},
     types::{
         AccountId, Capability, Meta, NodeId, NodeInfo, Payload, ResolvedScope, ScopeId, ScopeInfo,
     },
+};
+use subxt::{
+    ext::{frame_decode, scale_decode::IntoVisitor},
+    view_functions::Payload as ViewPayload,
 };
 
 /// Map a node view function failure to [`Error`].
@@ -112,10 +116,57 @@ pub(crate) async fn children(at: &At, node: NodeId) -> Result<Vec<NodeId>> {
     }
 }
 
+/// Execute a pallet view function and decode its result.
+///
+/// `subxt` passes the view function arguments to the `RuntimeViewFunction`
+/// runtime API without the `Vec<u8>` length prefix of its `input` parameter and
+/// decodes the reply without its outer `Result<Vec<u8>, ViewFunctionDispatchError>`.
+/// Runtimes then fail to decode the input, and the dispatch error is misread as
+/// an error of the view function itself. This performs the call with the wire
+/// format the runtime API actually defines.
+async fn view_call<P: ViewPayload>(at: &At, payload: P) -> Result<P::ReturnType, Source> {
+    use parity_scale_codec::{Decode, Encode};
+
+    const QUERY_ID_LEN: usize = 32;
+
+    let views = at.view_functions();
+    views.validate(&payload)?;
+
+    let (pallet, function) = (
+        payload.pallet_name().to_owned(),
+        payload.function_name().to_owned(),
+    );
+    let encoded = views.encode_args(&payload)?;
+    let (query_id, input) = encoded.split_at(QUERY_ID_LEN);
+    let mut args = query_id.to_vec();
+    input.encode_to(&mut args);
+
+    let reply = views.call_raw(Some(&args)).await?;
+    let mut reply = reply.as_slice();
+    let output = match u8::decode(&mut reply)? {
+        0 => Vec::<u8>::decode(&mut reply)?,
+        _ => {
+            return Err(format!(
+                "runtime rejected view function {pallet}.{function} \
+                 (the runtime and the client metadata disagree about it)"
+            )
+            .into())
+        }
+    };
+
+    let metadata = at.metadata_ref();
+    Ok(frame_decode::view_functions::decode_view_function_response(
+        &pallet,
+        &function,
+        &mut output.as_slice(),
+        metadata,
+        metadata.types(),
+        <P::ReturnType as IntoVisitor>::into_visitor(),
+    )?)
+}
+
 pub(crate) async fn resolve_scope(at: &At, node: NodeId) -> Result<ResolvedScope> {
-    let resolved = at
-        .view_functions()
-        .call(api::view_functions().cps().resolve_scope(node.rt()))
+    let resolved = view_call(at, api::view_functions().cps().resolve_scope(node.rt()))
         .await
         .map_err(Error::runtime)?;
     node_view(node, resolved).map(Into::into)
@@ -127,74 +178,60 @@ pub(crate) async fn has_capability(
     account: &AccountId,
     capability: Capability,
 ) -> Result<bool> {
-    let result = at
-        .view_functions()
-        .call(
-            api::view_functions()
-                .cps()
-                .has_capability(node.rt(), *account, capability.into()),
-        )
-        .await
-        .map_err(Error::runtime)?;
+    let result = view_call(
+        at,
+        api::view_functions()
+            .cps()
+            .has_capability(node.rt(), *account, capability.into()),
+    )
+    .await
+    .map_err(Error::runtime)?;
     node_view(node, result)
 }
 
 pub(crate) async fn identity_of(at: &At, node: NodeId) -> Result<Option<AccountId>> {
-    at.view_functions()
-        .call(api::view_functions().cps().identity_of(node.rt()))
+    view_call(at, api::view_functions().cps().identity_of(node.rt()))
         .await
         .map_err(Error::runtime)
 }
 
 pub(crate) async fn node_by_identity(at: &At, account: AccountId) -> Result<Option<NodeId>> {
-    let node = at
-        .view_functions()
-        .call(api::view_functions().cps().node_by_identity(account))
+    let node = view_call(at, api::view_functions().cps().node_by_identity(account))
         .await
         .map_err(Error::runtime)?;
     Ok(node.map(Into::into))
 }
 
 pub(crate) async fn address_parent(at: &At, account: AccountId) -> Result<Option<AccountId>> {
-    let result = at
-        .view_functions()
-        .call(api::view_functions().cps().parent(account))
+    let result = view_call(at, api::view_functions().cps().parent(account))
         .await
         .map_err(Error::runtime)?;
     address_view(account, result)
 }
 
 pub(crate) async fn address_children(at: &At, account: AccountId) -> Result<Vec<AccountId>> {
-    let result = at
-        .view_functions()
-        .call(api::view_functions().cps().children(account))
+    let result = view_call(at, api::view_functions().cps().children(account))
         .await
         .map_err(Error::runtime)?;
     address_view(account, result)
 }
 
 pub(crate) async fn address_meta(at: &At, account: AccountId) -> Result<Option<Meta>> {
-    let result = at
-        .view_functions()
-        .call(api::view_functions().cps().meta(account))
+    let result = view_call(at, api::view_functions().cps().meta(account))
         .await
         .map_err(Error::runtime)?;
     address_view(account, result).map(|meta| meta.map(|meta| meta.0))
 }
 
 pub(crate) async fn address_payload(at: &At, account: AccountId) -> Result<Option<Payload>> {
-    let result = at
-        .view_functions()
-        .call(api::view_functions().cps().payload(account))
+    let result = view_call(at, api::view_functions().cps().payload(account))
         .await
         .map_err(Error::runtime)?;
     address_view(account, result).map(|payload| payload.map(|payload| payload.0))
 }
 
 pub(crate) async fn address_scope(at: &At, account: AccountId) -> Result<ScopeId> {
-    let result = at
-        .view_functions()
-        .call(api::view_functions().cps().scope_of(account))
+    let result = view_call(at, api::view_functions().cps().scope_of(account))
         .await
         .map_err(Error::runtime)?;
     address_view(account, result).map(Into::into)
@@ -206,15 +243,14 @@ pub(crate) async fn address_capability(
     target: AccountId,
     capability: Capability,
 ) -> Result<bool> {
-    let result = at
-        .view_functions()
-        .call(
-            api::view_functions()
-                .cps()
-                .address_capability(caller, target, capability.into()),
-        )
-        .await
-        .map_err(Error::runtime)?;
+    let result = view_call(
+        at,
+        api::view_functions()
+            .cps()
+            .address_capability(caller, target, capability.into()),
+    )
+    .await
+    .map_err(Error::runtime)?;
     address_view(target, result)
 }
 
