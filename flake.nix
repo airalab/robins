@@ -59,7 +59,7 @@
         }
       );
 
-      packages = eachSystem (system: pkgs: import ./nix/pkgs { inherit pkgs self; });
+      packages = eachSystem (system: pkgs: import ./nix/pkgs { inherit pkgs; });
     }
     // {
       overlays = {
