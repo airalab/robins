@@ -1,4 +1,4 @@
-## 🌙 Robonomics Toolbox nightly `@TAG@`
+## 🌙 Robonomics Toolbox `@TAG@`
 
 > ⚠️ **Pre-release.** Built from commit [`@SHORT_SHA@`](https://github.com/@REPO@/commit/@SHA@).
 > Nightly builds are not audited, not stable and may change without notice.
@@ -22,10 +22,7 @@ Checksums for all archives: [`SHA256SUMS`](@BASE_URL@/SHA256SUMS).
 ```bash
 # pick one of: linux-x86_64, linux-aarch64, macos-aarch64, macos-x86_64
 PLATFORM=linux-x86_64
-
 curl -fsSL @BASE_URL@/robins-@TAG@-$PLATFORM.tar.gz | tar -xz
-sudo install -m 755 cps mqtt-bridge edge /usr/local/bin/
-cps --version
 ```
 
 Verify a download:
@@ -33,6 +30,13 @@ Verify a download:
 ```bash
 curl -fsSLO @BASE_URL@/SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
+```
+
+Install locally:
+
+```bash
+sudo install -m 755 cps mqtt-bridge edge /usr/local/bin/
+cps --version
 ```
 
 </details>
