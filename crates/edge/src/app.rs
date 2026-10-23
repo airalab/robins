@@ -323,6 +323,14 @@ async fn spawn_http_ingress(
         .await
         .with_context(|| format!("failed to bind HTTP ingress on {}", config.http.listen))?;
     let addr = listener.local_addr()?;
+    tracing::info!(
+        address = %addr,
+        route = %format!("POST {}", ingress::http::INGRESS_PATH),
+        "http ingress listening"
+    );
+    if let Some(warning) = config.http_open_relay_warning() {
+        tracing::warn!(address = %addr, "{warning}");
+    }
     let router = ingress::http::router(ingress_tx, config.http.max_body_bytes);
     let mut shutdown = controller.subscribe();
     tasks.push(tokio::spawn(async move {

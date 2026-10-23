@@ -77,6 +77,17 @@ $ edge gateway --config gateway.toml
 The daemon binds the HTTP ingress, subscribes to GossipSub, and starts the
 ops server. `Ctrl-C` triggers a graceful shutdown.
 
+The ingress serves a single route, `POST http://<[http].listen>/v1/telemetry`,
+whose body is a binary `SignedEnvelope`; `edge gateway --help` and the
+generated `gateway.toml` both name it.
+
+> **Exposure.** `[http].listen` defaults to `127.0.0.1:3000`. Ed25519
+> verification only proves that *some* key signed an envelope, so binding a
+> public address (e.g. `0.0.0.0:3000`) with `[auth] mode = "none"` turns the
+> gateway into an open relay for anyone who can reach it. This is permitted,
+> but `edge gateway` and `edge config check` print a warning; prefer
+> `mode = "whitelist"` when widening the bind.
+
 ### 4. Feed it and watch it work
 
 ```console
@@ -177,7 +188,7 @@ A fully commented example lives at [`examples/gateway.toml`](examples/gateway.to
 | Section      | Key                   | Default                     | Description                                            |
 | ------------ | --------------------- | ---------------------------- | ------------------------------------------------------ |
 | `[http]`     | `enabled`             | `true`                       | Enable the HTTP ingress transport.                     |
-|              | `listen`              | `0.0.0.0:3000`               | Ingress bind address (`POST /v1/telemetry`).           |
+|              | `listen`              | `127.0.0.1:3000`             | Ingress bind address (`POST /v1/telemetry`); loopback by default. |
 |              | `max_body_bytes`      | `65536`                      | Reject request bodies larger than this.                |
 | `[auth]`     | `mode`                | `none`                       | `none` accepts all valid envelopes; `whitelist` gates. |
 |              | `file`                | —                            | Whitelist file (required for `whitelist`).             |
