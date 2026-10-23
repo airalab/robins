@@ -7,35 +7,11 @@ pre-funded accounts, instant block production and a throwaway database, and buil
 
 ## Launch the node
 
-There is no standalone Robonomics node binary. The
-[airalab/robonomics](https://github.com/airalab/robonomics) repository builds the runtime and ships
-a helper that runs it with the generic `polkadot-omni-node` as a single-node `--dev` chain. Its
-developer guide ([Running a Development Chain](https://github.com/airalab/robonomics/blob/master/DEVELOPER_GUIDE.md#running-a-development-chain))
-has the one-liners. In a checkout of that repository:
+Start a development chain exactly as described in the CLI part,
+[Run a local development node](../01-cli/04-local-node.md): a single-node `--dev` chain on
+`ws://127.0.0.1:9944` with pre-funded accounts `//Alice`, `//Bob`, ... and an ephemeral database.
 
-```bash
-# build the runtime, generate the dev chain spec and bake both into a Docker image
-nix develop -c ./scripts/development-chain.sh docker
-
-# the script leaves the image untagged: tag the newest one and run it
-docker tag "$(docker images -q | head -n 1)" robonomics-dev
-docker run --rm -p 9944:9944 robonomics-dev
-```
-
-You get:
-
-- JSON-RPC and WebSocket on `ws://127.0.0.1:9944`;
-- block production without any session key setup;
-- pre-funded development accounts `//Alice`, `//Bob`, `//Charlie`, ...;
-- an ephemeral database: stop the container and the chain is gone.
-
-Arguments after the image name replace its default command, so repeat the defaults when adding
-flags: `docker run --rm -p 9944:9944 robonomics-dev --chain=/dev.json --dev --rpc-external`.
-
-Prefer no Docker? `nix develop -c ./scripts/development-chain.sh run` runs the same chain as a
-local process, and `cargo install staging-chain-spec-builder polkadot-omni-node` replaces Nix.
-
-Check the node answers, with the CLI from Part II:
+Check the node answers:
 
 ```bash
 cargo run -p libcps -- status        # RPC: ws://127.0.0.1:9944, block numbers growing
@@ -73,6 +49,6 @@ Walk through it:
    [Explore the network](02-explore-network.md)).
 6. **Delete** children before their parent.
 
-**CLI twin:** [`cps create`, `cps payload set`, `cps delete`](../cli/managing-nodes.md).
+**CLI twin:** [`cps create`, `cps payload set`, `cps delete`](../01-cli/05-managing-nodes.md).
 
 Next: [give the tree an identity](06-identity.md)

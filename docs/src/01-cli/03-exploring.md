@@ -1,8 +1,9 @@
 # Exploring the tree
 
-> **Library twin:** [Explore the network](../library/02-explore-network.md) and [Watch the network live](../library/03-watch.md)
+> **Library twin:** [Explore the network](../02-library/02-explore-network.md) and [Watch the network live](../02-library/03-watch.md)
 
 Reading needs no key. Point `cps` at a light client (`cps lc`) or any RPC endpoint and explore.
+The endpoint defaults to `ws://127.0.0.1:9944`; every setting is covered in [Configuration](08-configuration.md).
 
 ## Targets
 
@@ -35,7 +36,7 @@ Output of `show`:
 }
 ```
 
-Add `--decrypt` (with `--suri`) to read data encrypted for you, see [Encryption](encryption.md).
+Add `--decrypt` (with `--suri`) to read data encrypted for you, see [Encryption](07-encryption.md).
 
 ### Reading at a block
 

@@ -37,6 +37,6 @@ cargo run -p libcps --example 07_scope_access --no-default-features
 4. Writing is not owning: Bob's attempt to delete the desk fails with `Error::AccessDenied`.
 5. After `revoke`, Bob is back to no access.
 
-**CLI twin:** [`cps scope` and `cps access`](../cli/identity-scope-access.md).
+**CLI twin:** [`cps scope` and `cps access`](../01-cli/06-identity-scope-access.md).
 
 Next: [encrypt your data](08-encryption.md)

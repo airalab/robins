@@ -1,7 +1,7 @@
 [book]
-title = "Robonomics CPS: from explorer to network builder"
+title = "Robonomics / Robins"
 authors = ["Airalab <research@robonomics.network>"]
-description = "A guided tour of the Robonomics Network with the libcps library and the cps command-line tool."
+description = "Engineering the Open Machine Economy. Robins documentation: the cps command-line tool and the libcps library for the Robonomics Network."
 language = "en"
 src = "src"
 
@@ -9,5 +9,28 @@ src = "src"
 build-dir = "book"
 
 [output.html]
+default-theme = "light"
+preferred-dark-theme = "coal"
+additional-css = ["theme/robonomics.css"]
 git-repository-url = "https://github.com/airalab/robins"
 edit-url-template = "https://github.com/airalab/robins/edit/master/docs/{path}"
+
+# Published URLs from before the CLI/library parts were swapped and renamed.
+[output.html.redirect]
+"/cli/installation.html" = "../01-cli/01-installation.html"
+"/cli/light-client-and-status.html" = "../01-cli/02-light-client-and-status.html"
+"/cli/exploring.html" = "../01-cli/03-exploring.html"
+"/cli/managing-nodes.html" = "../01-cli/05-managing-nodes.html"
+"/cli/identity-scope-access.html" = "../01-cli/06-identity-scope-access.html"
+"/cli/encryption.html" = "../01-cli/07-encryption.html"
+"/cli/configuration.html" = "../01-cli/08-configuration.html"
+"/cli/scripting.html" = "../01-cli/09-scripting.html"
+"/cli/troubleshooting.html" = "../01-cli/10-troubleshooting.html"
+"/library/01-light-client.html" = "../02-library/01-light-client.html"
+"/library/02-explore-network.html" = "../02-library/02-explore-network.html"
+"/library/03-watch.html" = "../02-library/03-watch.html"
+"/library/04-offline-transactions.html" = "../02-library/04-offline-transactions.html"
+"/library/05-your-own-node.html" = "../02-library/05-your-own-node.html"
+"/library/06-identity.html" = "../02-library/06-identity.html"
+"/library/07-scopes-and-access.html" = "../02-library/07-scopes-and-access.html"
+"/library/08-encryption.html" = "../02-library/08-encryption.html"

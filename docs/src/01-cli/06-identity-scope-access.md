@@ -1,6 +1,6 @@
 # Identities, scopes and access
 
-> **Library twin:** [Identities and addresses](../library/06-identity.md) and [Scopes and access](../library/07-scopes-and-access.md)
+> **Library twin:** [Identities and addresses](../02-library/06-identity.md) and [Scopes and access](../02-library/07-scopes-and-access.md)
 
 ## Identities
 

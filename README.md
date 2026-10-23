@@ -28,7 +28,7 @@ This repository is organized as a Cargo workspace with the following structure:
   - CPS tree visualization
   - Robonomics parachain light client
   - Multi-algorithm AEAD encryption (XChaCha20-Poly1305, AES-256-GCM, ChaCha20-Poly1305)
-  - Documentation book in [docs/](docs/src/introduction.md) (library for builders, CLI for devops) and [numbered examples](crates/libcps/examples/README.md)
+  - Documentation book in [docs/](docs/src/introduction.md) (CLI for devops, library for builders) and [numbered examples](crates/libcps/examples/README.md)
   - See [crates/libcps/README.md](crates/libcps/README.md) for an overview
 
 - **`crates/mqtt-bridge/`** - bridge IoT devices from MQTT to the Robonomics using `libcps`

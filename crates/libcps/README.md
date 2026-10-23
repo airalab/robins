@@ -5,8 +5,8 @@ tree of nodes with metadata, payload, identities and access scopes stored on the
 
 | Package | For | Start here |
 | --- | --- | --- |
-| **`libcps`** (library) | builders writing Rust applications | [Part I of the book](../../docs/src/library/01-light-client.md), [numbered examples](examples/README.md) |
-| **`cps`** (CLI binary) | devops and shell scripters | [Part II of the book](../../docs/src/cli/installation.md) |
+| **`libcps`** (library) | builders writing Rust applications | [Part II of the book](../../docs/src/02-library/01-light-client.md), [numbered examples](examples/README.md) |
+| **`cps`** (CLI binary) | devops and shell scripters | [Part I of the book](../../docs/src/01-cli/01-installation.md) |
 
 The full guide is the documentation book in [`docs/`](../../docs/src/introduction.md): a journey
 from exploring the live Robonomics Network with a light client, to launching your own node, building a

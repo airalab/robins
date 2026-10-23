@@ -37,13 +37,13 @@ To bind another account (a device that holds its own key) to a node in your scop
 an **identity permit** (`IdentityPermit`) for the scope. `libcps` exposes
 `cps.identity_permit_payload(..)` for the exact bytes to sign and `permit::PermitArtifact` for the JSON
 artifact that is handed over; the node owner then submits `IdentityAssignment::with_permit(..)`.
-The CLI wraps the whole flow in [`cps identity permit`](../cli/identity-scope-access.md).
+The CLI wraps the whole flow in [`cps identity permit`](../01-cli/06-identity-scope-access.md).
 
 ## Snapshots
 
 `at.node(id).snapshot()` reads parent, scope, identity, metadata and payload at one block and tells a
 **missing** node (`None`) apart from a node whose fields are merely unset.
 
-**CLI twin:** [`cps identity`](../cli/identity-scope-access.md).
+**CLI twin:** [`cps identity`](../01-cli/06-identity-scope-access.md).
 
 Next: [let someone else write](07-scopes-and-access.md)

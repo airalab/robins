@@ -31,11 +31,11 @@ payload, decode the `EncryptedMessage` and call `receiver.decrypt(&message, Some
 Details of the schemes, key derivation and message format are in
 [Encryption internals](../reference/encryption-internals.md).
 
-**CLI twin:** [`--receiver-public` and `--decrypt`](../cli/encryption.md).
+**CLI twin:** [`--receiver-public` and `--decrypt`](../01-cli/07-encryption.md).
 
-## End of Part I
+## End of Part II
 
 You have explored the live network, watched it change, launched your own chain, built a tree, given
-it an identity, shared write access and protected data. For the operator's view of the same story
-continue with [Part II: CLI](../cli/installation.md); for conveniences see
+it an identity, shared write access and protected data, all from Rust. For the operator's view of
+the same story see [Part I: CLI](../01-cli/01-installation.md); for conveniences see
 [Appendix A](../appendix/profiles.md).

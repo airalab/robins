@@ -1,6 +1,6 @@
 # Light client and status
 
-> **Library twin:** [Join the network](../library/01-light-client.md)
+> **Library twin:** [Join the network](../02-library/01-light-client.md)
 
 ## `cps light-client` (`cps lc`)
 
@@ -11,7 +11,8 @@ cps lc
 ```
 
 It syncs the Polkadot relay chain and the Robonomics parachain from scratch and serves a local
-WebSocket JSON-RPC endpoint on `127.0.0.1:9944`, the default endpoint of every other `cps` command.
+WebSocket JSON-RPC endpoint on `127.0.0.1:9944`, the default endpoint of every other `cps` command
+(see [Configuration](08-configuration.md) to change it).
 Stop it with `Ctrl+C`.
 
 | Option | Meaning |

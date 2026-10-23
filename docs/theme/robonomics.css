@@ -1,0 +1,214 @@
+/*
+ * Robonomics technical documentation skin for the robins book.
+ *
+ * Brandbook rules applied here (https://robonomics-brandbook-connected-anna.wform.chatgpt.site/):
+ *   - Light: #FFFFFF canvas, #111111 graphics.
+ *   - Dark:  #111111 canvas; CHAIN artwork stays #161616.
+ *   - Brand artwork is used unmodified: only uniform scaling and recolouring by file choice or
+ *     colour filter. Never redraw, stretch or clip it.
+ *
+ * Content pages stay neutral and documentation-first; the brand shows in the menu bar, the
+ * sidebar hierarchy and the landing page hero. Every brand image is a CSS background, so the book
+ * stays fully readable when the SVG files are missing. No logo file is shipped yet, so the menu bar
+ * shows the title text only.
+ */
+
+/* ---------- Brand tokens ---------- */
+
+:root {
+    --rb-white: #ffffff;
+    --rb-ink: #111111;
+    --rb-chain-dark: #161616;
+
+    --rb-ink-soft: #4a4a4a;
+    --rb-line: #d9d9d9;
+    --rb-surface: #f4f4f4;
+
+    --rb-chain: url("../assets/brand/chain/chain-horizontal-light.svg");
+    --rb-chain-height: 3rem;
+    --rb-chain-tile: 9rem;
+}
+
+/* Light themes */
+.light,
+.rust,
+html:not(.js) {
+    --bg: var(--rb-white);
+    --fg: var(--rb-ink);
+
+    --sidebar-bg: var(--rb-surface);
+    --sidebar-fg: var(--rb-ink);
+    --sidebar-non-existant: #767676;
+    --sidebar-active: var(--rb-ink);
+    --sidebar-spacer: var(--rb-line);
+    --sidebar-header-border-color: var(--rb-ink);
+
+    --scrollbar: #767676;
+    --icons: #595959;
+    --icons-hover: var(--rb-ink);
+
+    --links: var(--rb-ink);
+    --inline-code-color: var(--rb-ink);
+
+    --theme-popup-bg: var(--rb-white);
+    --theme-popup-border: var(--rb-line);
+    --theme-hover: var(--rb-surface);
+
+    --quote-bg: var(--rb-surface);
+    --quote-border: var(--rb-line);
+
+    --table-border-color: var(--rb-line);
+    --table-header-bg: var(--rb-surface);
+    --table-alternate-bg: #fafafa;
+
+    --search-mark-bg: #e6e6e6;
+}
+
+/* Dark themes share one brand palette */
+.coal,
+.navy,
+.ayu {
+    --bg: var(--rb-ink);
+    --fg: #e8e8e8;
+
+    --sidebar-bg: #0c0c0c;
+    --sidebar-fg: #d0d0d0;
+    --sidebar-non-existant: #7a7a7a;
+    --sidebar-active: var(--rb-white);
+    --sidebar-spacer: #2a2a2a;
+    --sidebar-header-border-color: var(--rb-white);
+
+    --scrollbar: #7a7a7a;
+    --icons: #8c8c8c;
+    --icons-hover: var(--rb-white);
+
+    --links: var(--rb-white);
+    --inline-code-color: #f0f0f0;
+
+    --theme-popup-bg: #1a1a1a;
+    --theme-popup-border: #333333;
+    --theme-hover: #1e1e1e;
+
+    --quote-bg: #1a1a1a;
+    --quote-border: #2a2a2a;
+
+    --table-border-color: #2a2a2a;
+    --table-header-bg: #1e1e1e;
+    --table-alternate-bg: #151515;
+
+    --search-mark-bg: #3a3a3a;
+
+    --rb-ink-soft: #b5b5b5;
+    --rb-line: #2a2a2a;
+    --rb-surface: #1a1a1a;
+    --rb-chain: url("../assets/brand/chain/chain-horizontal-inverse.svg");
+}
+
+/* ---------- Typography and hierarchy ---------- */
+
+.content main a {
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+    text-decoration-thickness: 1px;
+}
+
+.content main h1 {
+    letter-spacing: -0.01em;
+}
+
+.content main h1,
+.content main h2 {
+    border-bottom: 1px solid var(--rb-line);
+    padding-bottom: 0.25em;
+}
+
+.content main blockquote {
+    border-inline-start: 3px solid var(--fg);
+}
+
+.content main table th {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.8em;
+}
+
+/* ---------- Menu bar: wordmark text ---------- */
+
+.menu-title {
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: 700;
+}
+
+/* ---------- Sidebar: part headings as structural markers ---------- */
+
+.chapter li.part-title {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.8em;
+    border-top: 1px solid var(--sidebar-spacer);
+    padding-top: 0.75rem;
+}
+
+/* ---------- Landing page hero and CHAIN divider ---------- */
+
+.robins-hero {
+    margin: 1rem 0 2rem;
+    padding: 2rem 0 0;
+}
+
+.robins-hero__eyebrow {
+    margin: 0;
+    font-size: 0.85em;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+}
+
+.robins-hero__tagline {
+    margin: 0.4rem 0 0.8rem;
+    font-size: 2.2em;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+}
+
+.robins-hero__lead {
+    margin: 0 0 1.5rem;
+    color: var(--rb-ink-soft);
+}
+
+/*
+ * A horizontal CHAIN line under the hero. One approved SVG per colour mode: the tile is 710:410,
+ * carries its own edge-to-edge line so it repeats seamlessly, and is only scaled uniformly. The
+ * box is shorter than the tile, which only hides its empty margin above and below the artwork.
+ */
+.robins-hero::after,
+.chain-divider {
+    content: "";
+    display: block;
+    height: var(--rb-chain-height);
+    background: var(--rb-chain) center / auto var(--rb-chain-tile) repeat-x;
+}
+
+.chain-divider {
+    margin: 2rem 0;
+}
+
+@media (max-width: 600px) {
+    .robins-hero__tagline {
+        font-size: 1.6em;
+    }
+
+    :root {
+        --rb-chain-height: 2rem;
+        --rb-chain-tile: 6rem;
+    }
+}
+
+@media print {
+    .robins-hero::after,
+    .chain-divider {
+        display: none;
+    }
+}

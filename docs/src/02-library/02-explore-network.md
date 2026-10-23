@@ -41,6 +41,6 @@ Values are plain bytes: sensor nodes usually store JSON text, while encrypted da
 > **Tip.** `cps.at(block_hash)` pins reads to any block your light client can still answer for, so
 > you can look at the network as it was some blocks ago.
 
-**CLI twin:** [`cps show` and `cps tree`](../cli/exploring.md).
+**CLI twin:** [`cps show` and `cps tree`](../01-cli/03-exploring.md).
 
 Next: [watch a node change](03-watch.md)

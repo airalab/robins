@@ -27,6 +27,6 @@ how many updates to wait for (default 5).
 You have now seen the whole read side of `libcps`. From here on we write, which needs somewhere to
 write to.
 
-**CLI twin:** [`cps payload watch`](../cli/exploring.md#following-changes).
+**CLI twin:** [`cps payload watch`](../01-cli/03-exploring.md#following-changes).
 
 Next: [prepare transactions offline](04-offline-transactions.md)

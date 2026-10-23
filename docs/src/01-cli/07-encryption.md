@@ -1,6 +1,6 @@
 # Encryption
 
-> **Library twin:** [Encrypt your data](../library/08-encryption.md)
+> **Library twin:** [Encrypt your data](../02-library/08-encryption.md)
 
 Anything written to the chain is public. Encrypt data for a receiver's public key when writing, and
 decrypt with the receiver's key when reading. A key agreement (ECDH) derives the shared key, so no

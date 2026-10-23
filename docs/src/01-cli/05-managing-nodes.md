@@ -1,9 +1,9 @@
 # Managing nodes and data
 
-> **Library twin:** [Launch your own node and grow a tree](../library/05-your-own-node.md)
+> **Library twin:** [Launch your own node and grow a tree](../02-library/05-your-own-node.md)
 
 Writing needs a chain you can pay on and an account: start the development node from
-[the library chapter](../library/05-your-own-node.md) and use the pre-funded `//Alice`.
+[Run a local development node](04-local-node.md) and use the pre-funded `//Alice`.
 
 ```bash
 export ROBONOMICS_WS_URL=ws://127.0.0.1:9944
@@ -30,7 +30,7 @@ The command prints the id of the new node.
 | `--payload <TEXT>` / `--payload-file <FILE>` | initial payload; `-` reads standard input |
 | `--identity <ACCOUNT>` | bind an identity account to the new node |
 | `--permit <FILE\|->` | identity permit for an identity other than your own |
-| `-r`, `--cipher`, `--scheme` | encrypt the data, see [Encryption](encryption.md) |
+| `-r`, `--cipher`, `--scheme` | encrypt the data, see [Encryption](07-encryption.md) |
 
 ## Update
 

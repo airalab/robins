@@ -24,7 +24,7 @@ cargo run -p libcps --example 02_explore_network --no-default-features --feature
 ```
 
 Examples 01-03 need the `light-client` feature. Examples 05-07 write to a chain: start a local
-development node first (a Docker one-liner, see the book's *Launch your own node* chapter) and, if
+development node first (a Docker one-liner, see the book's *Run a local development node* chapter) and, if
 needed, set `ROBONOMICS_WS_URL` (default `ws://127.0.0.1:9944`) and `ROBONOMICS_SURI` (default
 `//Alice`).
 

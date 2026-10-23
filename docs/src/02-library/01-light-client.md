@@ -45,6 +45,6 @@ pace, so long-running applications should keep watching the status.
 - `Cps::connect` takes **any** WebSocket URL, so the rest of the book works the same against a
   public RPC endpoint or your own node.
 
-**CLI twin:** [`cps light-client` and `cps status`](../cli/light-client-and-status.md).
+**CLI twin:** [`cps light-client` and `cps status`](../01-cli/02-light-client-and-status.md).
 
 Next: [what is on the network?](02-explore-network.md)
