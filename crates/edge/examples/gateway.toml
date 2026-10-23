@@ -10,10 +10,17 @@
 # here disabled for reference.
 
 # --- HTTP ingress -----------------------------------------------------------
-# Accepts signed protocol envelopes via `POST /telemetry/v1`.
+# Accepts signed protocol envelopes via `POST http://<listen>/v1/telemetry`
+# (request body: binary SignedEnvelope).
+#
+# Binds to loopback by default. A signature only proves that *some* key signed
+# the envelope, so a public bind (e.g. "0.0.0.0:3000") with [auth] mode = "none"
+# lets anyone who can reach the port publish telemetry with a freshly generated
+# key. This is allowed, but the gateway logs a warning; prefer
+# mode = "whitelist" when exposing the ingress beyond the host.
 [http]
 enabled = true
-listen = "0.0.0.0:3000"
+listen = "127.0.0.1:3000"
 # Reject bodies larger than this many bytes (64 KiB is ample for one envelope).
 max_body_bytes = 65536
 

@@ -64,22 +64,40 @@ pub struct Config {
 }
 
 /// HTTP ingress listener configuration (`[http]`).
+///
+/// The listener serves a single route, `POST /v1/telemetry`
+/// ([`crate::ingress::http::INGRESS_PATH`]), whose body is a binary
+/// Connectivity Protocol `SignedEnvelope`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HttpConfig {
     /// Whether the HTTP ingress transport is enabled.
     pub enabled: bool,
     /// Address to bind the ingress listener to.
+    ///
+    /// Defaults to loopback (`127.0.0.1:3000`): a valid signature only proves
+    /// that *some* key signed the envelope, so with `[auth] mode = "none"` a
+    /// non-loopback bind lets anyone on the network inject telemetry into the
+    /// GossipSub topic. Widening the bind is allowed but should be deliberate;
+    /// the gateway logs a warning at startup when it is combined with
+    /// `[auth] mode = "none"`.
     pub listen: SocketAddr,
     /// Maximum accepted request body size, in bytes.
     pub max_body_bytes: usize,
+}
+
+impl HttpConfig {
+    /// Whether this listener is reachable from beyond the local host.
+    pub fn is_public(&self) -> bool {
+        !self.listen.ip().is_loopback()
+    }
 }
 
 impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen: "0.0.0.0:3000".parse().expect("valid default http listen"),
+            listen: "127.0.0.1:3000".parse().expect("valid default http listen"),
             // 64 KiB is generous for a single signed envelope.
             max_body_bytes: 64 * 1024,
         }
@@ -338,6 +356,30 @@ pub enum ConfigError {
 }
 
 impl Config {
+    /// Whether the HTTP ingress accepts envelopes from any network peer
+    /// without an authorization gate.
+    ///
+    /// True when HTTP ingress is enabled on a non-loopback address while
+    /// `[auth] mode = "none"`. This is a permitted but risky setup: Ed25519
+    /// verification only proves that *some* key signed the envelope, so the
+    /// gateway relays telemetry from anyone able to reach the listener.
+    pub fn http_open_relay(&self) -> bool {
+        self.http.enabled && self.http.is_public() && self.auth.mode == AuthMode::None
+    }
+
+    /// Operator-facing warning for an [open relay](Config::http_open_relay)
+    /// setup, or `None` when the HTTP ingress is not exposed that way.
+    pub fn http_open_relay_warning(&self) -> Option<String> {
+        self.http_open_relay().then(|| {
+            format!(
+                "http.listen = \"{}\" is not a loopback address while auth.mode = \"none\": \
+                 anyone who can reach it may publish validly signed telemetry with a freshly \
+                 generated key; consider auth.mode = \"whitelist\" or a loopback bind",
+                self.http.listen
+            )
+        })
+    }
+
     /// Loads and validates configuration from a TOML file at `path`.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
         let path = path.as_ref();
@@ -499,6 +541,32 @@ mod tests {
     #[test]
     fn defaults_are_valid() {
         Config::default().validate().expect("defaults valid");
+    }
+
+    #[test]
+    fn default_http_ingress_is_loopback_only() {
+        let cfg = Config::default();
+        assert!(cfg.http.listen.ip().is_loopback());
+        assert!(!cfg.http_open_relay());
+    }
+
+    #[test]
+    fn public_bind_without_auth_is_allowed_but_flagged() {
+        let mut cfg = Config::default();
+        cfg.http.listen = "0.0.0.0:3000".parse().unwrap();
+        cfg.validate()
+            .expect("public unauthenticated bind is permitted");
+        assert!(cfg.http_open_relay());
+
+        cfg.auth = AuthConfig {
+            mode: AuthMode::Whitelist,
+            file: Some("/etc/edge/whitelist.txt".into()),
+        };
+        assert!(!cfg.http_open_relay());
+
+        cfg.auth = AuthConfig::default();
+        cfg.http.enabled = false;
+        assert!(!cfg.http_open_relay());
     }
 
     #[test]

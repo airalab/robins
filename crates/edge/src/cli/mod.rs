@@ -120,7 +120,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Run the long-running gateway daemon [ALIAS: g].
-    #[command(alias = "g")]
+    #[command(alias = "g", after_help = gateway_after_help())]
     Gateway {
         /// Path to the gateway TOML configuration file.
         #[arg(short, long, default_value = crate::config::DEFAULT_CONFIG_PATH)]
@@ -178,6 +178,20 @@ pub fn run() -> ExitCode {
             ExitCode::from(err.code)
         }
     }
+}
+
+/// Extra `edge gateway --help` text documenting the endpoints the daemon
+/// serves, so the ingress route is discoverable from the tool itself.
+fn gateway_after_help() -> String {
+    format!(
+        "Endpoints:\n  \
+         HTTP ingress:  {}\n  \
+         Ops server:    GET http://<[metrics].listen>/{{health,ready,metrics,debug/peers}}\n\n\
+         The HTTP ingress binds to loopback by default. Binding it to a public address\n\
+         while [auth] mode = \"none\" lets anyone who can reach it publish telemetry\n\
+         signed with a freshly generated key; the daemon logs a warning in that case.",
+        crate::ingress::http::route_summary()
+    )
 }
 
 /// Load `config`, build a multi-threaded Tokio runtime, and run the gateway

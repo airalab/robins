@@ -50,7 +50,16 @@ use std::time::SystemTime;
 use tokio::sync::mpsc::error::TrySendError;
 
 /// The single ingress route path.
-const INGRESS_PATH: &str = "/v1/telemetry";
+pub const INGRESS_PATH: &str = "/v1/telemetry";
+
+/// Human-readable description of the ingress endpoint, relative to the
+/// configured `[http].listen` address.
+///
+/// Surfaced in `edge gateway --help` and the generated `gateway.toml` so the
+/// route is discoverable without reading the source or README.
+pub fn route_summary() -> String {
+    format!("POST http://<[http].listen>{INGRESS_PATH} (body: binary SignedEnvelope)")
+}
 
 /// Shared handler state: the sending half of the bounded ingress channel.
 #[derive(Clone)]
