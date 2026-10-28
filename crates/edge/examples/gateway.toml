@@ -46,7 +46,7 @@ mode = "none"
 # cps_negative_ttl_secs = 60
 # cps_query_timeout_secs = 10         # one lookup on a ready connection
 # cps_max_concurrent_lookups = 8      # chain queries running at once
-# cps_max_pending = 256               # messages waiting for a lookup; more are dropped
+# cps_max_pending = 256               # messages waiting for a lookup; beyond it ingestion pauses (backpressure)
 
 # --- GossipSub publisher ----------------------------------------------------
 # Publishes accepted envelopes to the libp2p pub/sub mesh.

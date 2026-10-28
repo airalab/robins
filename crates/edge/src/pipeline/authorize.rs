@@ -34,10 +34,14 @@
 //! - **Bounded concurrency.** At most [`AuthLimits::max_concurrent`] lookups run
 //!   at the same time, each in a task of a fixed-size [`JoinSet`]; no task is
 //!   spawned for a message that is parked behind them.
-//! - **Bounded memory.** At most [`AuthLimits::max_pending`] messages are parked
-//!   (running lookups included). Beyond that, messages from sensors without a
-//!   known decision are dropped, which keeps a flood of unknown sensors from
-//!   growing memory or delaying cached ones. Dropping the stage aborts every
+//! - **Bounded memory, no shedding.** At most [`AuthLimits::max_pending`] messages
+//!   are parked (running lookups included). A message that finds the stage full
+//!   is handed back as [`Admission::Overflow`] and the pipeline holds it until a
+//!   lookup finishes instead of dropping it. Ingress is not drained meanwhile, so
+//!   its bounded channel fills and the transports push back on senders (HTTP
+//!   answers `429`, which is retryable) rather than acknowledging telemetry that
+//!   is later discarded. The cost is that cached sensors queue behind the
+//!   saturated stage for at most one lookup. Dropping the stage aborts every
 //!   running lookup, so shutdown has nothing left to wait for.
 //!
 //! The stage only decides; it never forwards. The pipeline sends a message on
@@ -84,7 +88,8 @@ pub(super) enum Admission {
     /// The message waits for a lookup; it comes back from
     /// [`AuthStage::next_resolution`].
     Parked,
-    /// Too many messages are waiting; the message is given back unhandled.
+    /// Too many messages are waiting; the message is given back unhandled so the
+    /// caller can apply backpressure.
     Overflow(Verified),
 }
 

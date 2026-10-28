@@ -198,7 +198,7 @@ A fully commented example lives at [`examples/gateway.toml`](examples/gateway.to
 |              | `cps_negative_ttl_secs` | `60`                       | How long a denial is cached.                           |
 |              | `cps_query_timeout_secs` | `10`                      | Timeout of one CPS lookup on a ready connection.       |
 |              | `cps_max_concurrent_lookups` | `8`                   | Most CPS lookups running at once.                      |
-|              | `cps_max_pending`     | `256`                        | Most messages waiting for a CPS lookup; more are dropped. |
+|              | `cps_max_pending`     | `256`                        | Most messages waiting for a CPS lookup; beyond it ingestion pauses (backpressure).  |
 | `[pubsub]`   | `enabled`             | `true`                       | Enable the GossipSub publisher.                        |
 |              | `listen`              | `["/ip4/0.0.0.0/tcp/64442"]` | libp2p listen multiaddrs (TCP, `/ws`, `/quic-v1`).   |
 |              | `topic`               | `sensors.social/v1`          | Topic accepted envelopes are published to.             |
@@ -253,13 +253,17 @@ cps_expected_genesis_hash = "0x..."   # intended network
   and looked up by a bounded stage: at most `cps_max_concurrent_lookups` (`8`)
   queries run at once, messages from the same sensor share one query
   (singleflight), and at most `cps_max_pending` (`256`) messages wait. Beyond
-  that, messages from sensors without a cached decision are dropped
-  (`edge_auth_pending_dropped_total`) while cached sensors keep flowing. Only
-  verified and authorized envelopes reach deduplication and the sinks.
+  that the pipeline pauses (`edge_auth_backpressure_total`) instead of dropping
+  messages: the bounded ingress channel fills and senders get a retryable
+  `429` (HTTP) or are held back (Meshtastic), so telemetry is never acknowledged
+  and then shed. While paused, even cached sensors wait behind the stage for at
+  most one lookup (`cps_query_timeout_secs`). Only verified and authorized
+  envelopes reach deduplication and the sinks.
 - One light client serves both authorization and anchoring. The shared
   `ChainRegistry` owns each connection: it connects, waits for the embedded
   light client to synchronize, retries failures and reconnects if the light
-  client stops. While the chain is still synchronizing or unavailable, uncached
+  client stops. While the chain is still synchronizing (also when an embedded light
+  client falls back from ready to synchronizing) or unavailable, uncached
   sensors fail closed immediately (no denial is cached) and cached allows keep
   working. `cps_query_timeout_secs` applies to a query on a ready connection
   and never cancels or restarts the shared synchronization.
@@ -279,7 +283,7 @@ cps_expected_genesis_hash = "0x..."   # intended network
   is evicted or the gateway restarts; CPS nodes are normally not removed.
 - Metrics: `edge_auth_rejected_total`, `edge_auth_cps_cache_hit_total{decision}`,
   `edge_auth_cps_cache_miss_total`, `edge_auth_cps_lookup_error_total`,
-  `edge_auth_cps_cache_entries`, `edge_auth_pending_dropped_total`,
+  `edge_auth_cps_cache_entries`, `edge_auth_backpressure_total`,
   `edge_auth_pending`, `edge_auth_lookups_in_flight`.
 
 ### Durable batching and CPS anchoring

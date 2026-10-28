@@ -47,6 +47,9 @@
 //! - [`ChainRegistry::try_get`] never waits and reports a connection that is
 //!   still synchronizing as unavailable (used by authorization, which must fail
 //!   closed instead of queueing behind a synchronization that may take minutes).
+//!   An embedded light client can fall from ready back to synchronizing without
+//!   stopping; it is reported as unavailable for that period and usable again
+//!   once it has caught up, without being reconnected.
 //!
 //! Nothing here runs at daemon startup unless asked ([`ChainRegistry::prefetch`]),
 //! so an unreachable chain cannot block ingestion.
@@ -122,6 +125,16 @@ impl Chain {
 pub trait Link: Send + Sync + 'static {
     /// Resolves once the connection is no longer usable and must be replaced.
     async fn lost(&self);
+
+    /// Whether the connection currently follows the chain closely enough to
+    /// answer finalized-state queries.
+    ///
+    /// An embedded light client that falls behind goes back to synchronizing
+    /// without stopping, so [`lost`](Self::lost) does not fire; this reports
+    /// that dip. Connections that cannot fall behind are always in sync.
+    fn in_sync(&self) -> bool {
+        true
+    }
 }
 
 #[async_trait]
@@ -134,6 +147,12 @@ impl Link for Chain {
             // An external endpoint is reconnected by the RPC client itself.
             None => std::future::pending().await,
         }
+    }
+
+    fn in_sync(&self) -> bool {
+        self.light
+            .as_ref()
+            .is_none_or(|light| light.current_status().is_ready())
     }
 }
 
@@ -258,10 +277,18 @@ impl<C: Link> ChainRegistry<C> {
 
     /// The shared connection for `endpoint` if it is ready right now.
     ///
-    /// Never waits. A connection that is still synchronizing is reported as a
+    /// Never waits. A connection that is still synchronizing, or that fell
+    /// back to synchronizing after having been ready, is reported as a
     /// transient error, so the caller can fail closed.
     pub fn try_get(&self, endpoint: Option<&str>) -> Result<Arc<C>, ChainError> {
-        self.slot(endpoint).state.borrow().resolve()
+        let chain = self.slot(endpoint).state.borrow().resolve()?;
+        if chain.in_sync() {
+            Ok(chain)
+        } else {
+            Err(ChainError::Transient(
+                "chain is synchronizing again".to_string(),
+            ))
+        }
     }
 
     /// The slot of `endpoint`, starting its supervisor on first use.
@@ -345,19 +372,24 @@ fn classify(error: CpsError) -> ChainError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
     /// A fake connection that can be told to drop.
     struct Fake {
         id: usize,
         lost: Notify,
+        synced: AtomicBool,
     }
 
     #[async_trait]
     impl Link for Fake {
         async fn lost(&self) {
             self.lost.notified().await;
+        }
+
+        fn in_sync(&self) -> bool {
+            self.synced.load(Ordering::SeqCst)
         }
     }
 
@@ -393,6 +425,7 @@ mod tests {
             Ok(Fake {
                 id,
                 lost: Notify::new(),
+                synced: AtomicBool::new(true),
             })
         }
     }
@@ -475,6 +508,25 @@ mod tests {
         chains.get(None).await.unwrap();
         assert!(chains.try_get(None).is_ok());
         assert_eq!(connector.started.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn try_get_gates_on_a_connection_that_fell_behind() {
+        let connector = Arc::new(Connector::default());
+        let chains = registry(&connector);
+        let chain = chains.get(None).await.unwrap();
+        assert!(chains.try_get(None).is_ok(), "ready");
+
+        chain.synced.store(false, Ordering::SeqCst);
+        assert!(matches!(
+            chains.try_get(None),
+            Err(ChainError::Transient(_))
+        ));
+        assert_eq!(connector.started.load(Ordering::SeqCst), 1, "not restarted");
+
+        chain.synced.store(true, Ordering::SeqCst);
+        assert!(Arc::ptr_eq(&chain, &chains.try_get(None).unwrap()));
+        assert_eq!(connector.started.load(Ordering::SeqCst), 1, "not restarted");
     }
 
     #[tokio::test]

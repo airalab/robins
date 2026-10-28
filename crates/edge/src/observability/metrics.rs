@@ -47,9 +47,9 @@ pub const AUTH_CPS_CACHE_MISS_TOTAL: &str = "edge_auth_cps_cache_miss_total";
 pub const AUTH_CPS_LOOKUP_ERROR_TOTAL: &str = "edge_auth_cps_lookup_error_total";
 /// Entries currently held by the CPS authorization cache (gauge).
 pub const AUTH_CPS_CACHE_ENTRIES: &str = "edge_auth_cps_cache_entries";
-/// Messages dropped because too many were already waiting for an authorization
-/// lookup (counter).
-pub const AUTH_PENDING_DROPPED_TOTAL: &str = "edge_auth_pending_dropped_total";
+/// Times the pipeline paused ingestion because too many messages were already
+/// waiting for an authorization lookup (counter).
+pub const AUTH_BACKPRESSURE_TOTAL: &str = "edge_auth_backpressure_total";
 /// Messages currently waiting for an authorization lookup (gauge).
 pub const AUTH_PENDING: &str = "edge_auth_pending";
 /// Authorization lookups currently running (gauge).
@@ -165,8 +165,8 @@ fn describe() {
         "Entries currently held by the CPS authorization cache"
     );
     metrics::describe_counter!(
-        AUTH_PENDING_DROPPED_TOTAL,
-        "Messages dropped because the authorization queue was full"
+        AUTH_BACKPRESSURE_TOTAL,
+        "Times ingestion paused because the authorization queue was full"
     );
     metrics::describe_gauge!(
         AUTH_PENDING,
@@ -304,7 +304,7 @@ mod tests {
             AUTH_CPS_CACHE_MISS_TOTAL,
             AUTH_CPS_LOOKUP_ERROR_TOTAL,
             AUTH_CPS_CACHE_ENTRIES,
-            AUTH_PENDING_DROPPED_TOTAL,
+            AUTH_BACKPRESSURE_TOTAL,
             AUTH_PENDING,
             AUTH_LOOKUPS_IN_FLIGHT,
             PUBLISH_TOTAL,

@@ -29,6 +29,9 @@
 //!    dropped and [`AUTH_CPS_LOOKUP_ERROR_TOTAL`] is incremented. Decisions that
 //!    need a slow lookup run in a bounded asynchronous stage (see [`authorize`]),
 //!    so a pending lookup never delays sensors whose decision is already known.
+//!    When that stage is full the pipeline pauses (counted by
+//!    [`AUTH_BACKPRESSURE_TOTAL`]) rather than dropping messages, so saturation
+//!    reaches the ingress transports as backpressure.
 //!    Only authorized envelopes reach the next steps.
 //! 3. **Deduplicate** by [`EnvelopeId`] via a bounded TTL [`DedupCache`];
 //!    duplicates increment [`DEDUP_DROPPED_TOTAL`].
@@ -60,8 +63,8 @@ pub use dedup::DedupCache;
 use crate::auth::AuthPolicy;
 use crate::ingress::{IngressMessage, IngressReceiver, TransportMetadata};
 use crate::observability::metrics::{
-    AUTH_CPS_LOOKUP_ERROR_TOTAL, AUTH_PENDING_DROPPED_TOTAL, AUTH_REJECTED_TOTAL,
-    DEDUP_DROPPED_TOTAL, VALIDATION_REJECTED_TOTAL,
+    AUTH_BACKPRESSURE_TOTAL, AUTH_CPS_LOOKUP_ERROR_TOTAL, AUTH_REJECTED_TOTAL, DEDUP_DROPPED_TOTAL,
+    VALIDATION_REJECTED_TOTAL,
 };
 use crate::protocol::{
     envelope_id, verify_envelope, EnvelopeId, SensorId, SignedEnvelope, VerifiedEnvelope,
@@ -280,18 +283,40 @@ impl Pipeline {
             }
         };
 
-        match stage.admit(Verified { message, verified }) {
-            Admission::Decided(allowed, message) => self.decide(allowed, message, shutdown).await,
-            Admission::Parked => {}
-            Admission::Overflow(message) => {
-                let transport = message.message.transport.transport.as_str();
-                metrics::counter!(AUTH_PENDING_DROPPED_TOTAL, "transport" => transport)
-                    .increment(1);
-                tracing::warn!(
-                    sensor_id = %message.verified.sensor_id,
-                    transport,
-                    "dropped: too many messages waiting for authorization"
-                );
+        // A full stage pauses the pipeline instead of dropping the message:
+        // ingress stops being drained, its bounded channel fills, and the
+        // transports push back on the senders (HTTP answers `503`).
+        let mut waiting = Verified { message, verified };
+        let mut paused = false;
+        loop {
+            match stage.admit(waiting) {
+                Admission::Decided(allowed, message) => {
+                    self.decide(allowed, message, shutdown).await;
+                    return;
+                }
+                Admission::Parked => return,
+                Admission::Overflow(message) => {
+                    if !paused {
+                        paused = true;
+                        let transport = message.message.transport.transport.as_str();
+                        metrics::counter!(AUTH_BACKPRESSURE_TOTAL, "transport" => transport)
+                            .increment(1);
+                        tracing::warn!(
+                            sensor_id = %message.verified.sensor_id,
+                            transport,
+                            "authorization queue full; pausing ingestion until a lookup finishes"
+                        );
+                    }
+                    waiting = message;
+                }
+            }
+            // The stage is full, so a lookup is running and will finish. Its
+            // result may also settle `waiting`, which `admit` then re-checks.
+            tokio::select! {
+                _ = shutdown.recv() => return,
+                resolution = stage.next_resolution() => {
+                    self.resolve(resolution, shutdown).await;
+                }
             }
         }
     }
@@ -801,7 +826,13 @@ mod tests {
     }
 
     async fn next_delivery(running: &mut Running) -> Arc<AcceptedMessage> {
-        tokio::time::timeout(Duration::from_secs(5), running.delivered.recv())
+        next_delivery_from(&mut running.delivered).await
+    }
+
+    async fn next_delivery_from(
+        delivered: &mut mpsc::Receiver<Arc<AcceptedMessage>>,
+    ) -> Arc<AcceptedMessage> {
+        tokio::time::timeout(Duration::from_secs(5), delivered.recv())
             .await
             .expect("a message is delivered in time")
             .expect("sink open")
@@ -863,25 +894,58 @@ mod tests {
         assert_eq!(auth.in_flight.load(Ordering::SeqCst), 3);
         assert_eq!(auth.max_in_flight.load(Ordering::SeqCst), 3);
 
-        // Overload sheds unknown sensors but still serves known ones.
+        // Saturation delays a known sensor behind the stalled stage.
         running
             .tx
-            .send(ingress_message(&cached, b"still served"))
+            .send(ingress_message(&cached, b"queued"))
             .await
             .unwrap();
-        assert_eq!(
-            next_delivery(&mut running).await.sensor_id,
-            cached.sensor_id()
-        );
+        settle().await;
+        assert!(running.delivered.try_recv().is_err());
 
         auth.open();
-        for _ in 0..10 {
+        for _ in 0..101 {
             next_delivery(&mut running).await;
         }
         settle().await;
-        assert!(running.delivered.try_recv().is_err(), "the rest was shed");
-        assert_eq!(auth.lookups.load(Ordering::SeqCst), 10);
+        assert!(running.delivered.try_recv().is_err());
+        assert_eq!(auth.lookups.load(Ordering::SeqCst), 100);
         assert_eq!(auth.max_in_flight.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn saturated_authorization_pushes_back_on_ingress_without_loss() {
+        let auth = GatedAuth::new(&[]);
+        let (sink, mut delivered) = ChannelSink::new("test", 1024);
+        let pipeline = Pipeline::new(Box::new(auth.clone()), dedup(), vec![Box::new(sink)])
+            .with_auth_limits(AuthLimits {
+                max_concurrent: 1,
+                max_pending: 2,
+            });
+        let (tx, ingress_rx) = channel(2);
+        let controller = ShutdownController::new();
+        tokio::spawn(pipeline.run(ingress_rx, controller.subscribe()));
+
+        // Two messages park, one is held by the pipeline, two fill the channel.
+        let mut accepted = 0;
+        for seed in 0..10 {
+            if tx
+                .try_send(ingress_message(&identity(seed), b"burst"))
+                .is_ok()
+            {
+                accepted += 1;
+            }
+            settle().await;
+        }
+        assert_eq!(accepted, 5, "the rest is refused at ingress, retryably");
+
+        auth.open();
+        for _ in 0..accepted {
+            next_delivery_from(&mut delivered).await;
+        }
+        settle().await;
+        assert!(delivered.try_recv().is_err());
+        assert_eq!(auth.lookups.load(Ordering::SeqCst), accepted);
     }
 
     #[tokio::test]
