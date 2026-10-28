@@ -29,6 +29,10 @@
 //!   ops server (/health,/ready,/metrics,/debug/peers)
 //! ```
 //!
+//! The authorization policy (`[auth] mode = "cps"`) and the anchor read the
+//! chain through one shared [`ChainRegistry`], so a single embedded light client
+//! serves both and neither depends on the other being enabled.
+//!
 //! Listeners are bound eagerly so their concrete addresses are known before the
 //! serving tasks spawn (useful for `:0` ephemeral ports in tests). A single
 //! [`ShutdownController`] fans a shutdown signal out to every task; [`shutdown`]
@@ -40,12 +44,13 @@ use crate::anchor::{self, ChainConfig, RetryPolicy};
 use crate::auth;
 use crate::batch_store::{reconcile_format, BatchStore, RedbBatchStore};
 use crate::batcher::Batcher;
-use crate::config::Config;
+use crate::chain::ChainRegistry;
+use crate::config::{AuthMode, Config};
 use crate::ingress::meshtastic::MeshtasticIngress;
 use crate::ingress::{self, Ingress, IngressSender};
 use crate::observability::{self, Health};
 use crate::p2p::{self, GossipConfig, GossipNode, PeerRegistry};
-use crate::pipeline::{BatchSink, ChannelSink, DedupCache, MessageSink, Pipeline};
+use crate::pipeline::{AuthLimits, BatchSink, ChannelSink, DedupCache, MessageSink, Pipeline};
 use crate::shutdown::ShutdownController;
 use anyhow::Context;
 use libcps::NodeId;
@@ -86,6 +91,8 @@ impl EdgeApp {
     pub async fn start(config: Config) -> anyhow::Result<Self> {
         observability::init_tracing("info");
         let metrics = install_metrics();
+        // One chain connection per endpoint, shared by CPS auth and anchoring.
+        let chains = Arc::new(ChainRegistry::new());
         let health = Health::new();
         let controller = ShutdownController::new();
         let mut tasks = Vec::new();
@@ -135,18 +142,30 @@ impl EdgeApp {
         // Durable batching and CPS anchoring. The batch sink goes first so an
         // envelope is on disk before any other sink sees it.
         if config.blockchain.enabled {
-            spawn_anchoring(&config, &controller, &mut sinks, &mut tasks)
+            spawn_anchoring(&config, chains.clone(), &controller, &mut sinks, &mut tasks)
                 .await
                 .context("failed to start durable batching and anchoring")?;
         }
 
         // Acceptance pipeline.
-        let policy = auth::from_config(&config.auth).context("failed to build auth policy")?;
+        let policy = auth::from_config(
+            &config.auth,
+            config.blockchain.endpoint.as_deref(),
+            chains.clone(),
+        )
+        .context("failed to build auth policy")?;
+        if config.auth.mode == AuthMode::Cps {
+            // Begin synchronizing now; ingestion never waits for it.
+            chains.prefetch(config.blockchain.endpoint.as_deref());
+        }
         let dedup = DedupCache::new(
             config.pipeline.dedup_capacity,
             Duration::from_secs(config.pipeline.dedup_ttl_secs),
         );
-        let pipeline = Pipeline::new(policy, dedup, sinks);
+        let pipeline = Pipeline::new(policy, dedup, sinks).with_auth_limits(AuthLimits {
+            max_concurrent: config.auth.cps_max_concurrent_lookups,
+            max_pending: config.auth.cps_max_pending,
+        });
         let pipeline_shutdown = controller.subscribe();
         tasks.push(tokio::spawn(pipeline.run(ingress_rx, pipeline_shutdown)));
 
@@ -236,6 +255,7 @@ fn install_metrics() -> metrics_exporter_prometheus::PrometheusHandle {
 /// inside the anchor task, so an unreachable chain never blocks ingestion.
 async fn spawn_anchoring(
     config: &Config,
+    chains: Arc<ChainRegistry>,
     controller: &ShutdownController,
     sinks: &mut Vec<Box<dyn MessageSink>>,
     tasks: &mut Vec<JoinHandle<()>>,
@@ -293,7 +313,7 @@ async fn spawn_anchoring(
     tasks.push(tokio::spawn(batcher.run(batcher_shutdown)));
 
     let chain = ChainConfig {
-        endpoint: blockchain.endpoint.clone(),
+        endpoint: config.blockchain.endpoint.clone(),
         suri,
         node: NodeId(node_id),
         retry: RetryPolicy {
@@ -305,6 +325,7 @@ async fn spawn_anchoring(
     let anchor_shutdown = controller.subscribe();
     tasks.push(tokio::spawn(anchor::run_chain_anchor(
         chain,
+        chains,
         store,
         ready,
         anchor_shutdown,

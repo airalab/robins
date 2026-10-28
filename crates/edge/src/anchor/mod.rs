@@ -45,6 +45,7 @@ pub use cps::LibcpsTarget;
 pub use worker::run_chain_anchor;
 
 use crate::batch_store::{BatchStore, StoreError, StoredBatch};
+use crate::chain::ChainError;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -130,3 +131,12 @@ impl Anchor {
 
 #[cfg(test)]
 mod tests;
+
+impl From<ChainError> for AnchorError {
+    fn from(error: ChainError) -> Self {
+        match error {
+            ChainError::Transient(message) => Self::Transient(message),
+            ChainError::Permanent(message) => Self::Permanent(message),
+        }
+    }
+}

@@ -55,6 +55,7 @@ pub mod app;
 pub mod auth;
 pub mod batch_store;
 pub mod batcher;
+pub mod chain;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;

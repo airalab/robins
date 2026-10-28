@@ -21,9 +21,10 @@
 //! non-empty, non-comment line holds one sensor identity in either SS58 or
 //! `0x`-prefixed hex form; `#` begins a comment.
 
-use super::AuthPolicy;
+use super::{AuthError, AuthPolicy};
 use crate::config::AuthMode;
 use crate::protocol::SensorId;
+use async_trait::async_trait;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
@@ -93,13 +94,18 @@ fn parse_sensor_id(entry: &str) -> Result<SensorId, String> {
     SensorId::from_hex(entry).map_err(|err| format!("not a valid ss58 or hex sensor_id ({err})"))
 }
 
+#[async_trait]
 impl AuthPolicy for Whitelist {
     fn mode(&self) -> AuthMode {
         AuthMode::Whitelist
     }
 
-    fn authorize(&self, sensor_id: &SensorId) -> bool {
-        self.allowed.contains(sensor_id)
+    fn try_authorize(&self, sensor_id: &SensorId) -> Option<bool> {
+        Some(self.allowed.contains(sensor_id))
+    }
+
+    async fn authorize(&self, sensor_id: &SensorId) -> Result<bool, AuthError> {
+        Ok(self.allowed.contains(sensor_id))
     }
 }
 
@@ -112,20 +118,20 @@ mod tests {
         SensorIdentity::from_secret_bytes(&[seed; 32]).sensor_id()
     }
 
-    #[test]
-    fn authorizes_only_listed_sensors() {
+    #[tokio::test]
+    async fn authorizes_only_listed_sensors() {
         let allowed = sensor(1);
         let denied = sensor(2);
         let policy = Whitelist::new([allowed.clone()]);
 
         assert_eq!(policy.mode(), AuthMode::Whitelist);
         assert_eq!(policy.len(), 1);
-        assert!(policy.authorize(&allowed));
-        assert!(!policy.authorize(&denied));
+        assert!(policy.authorize(&allowed).await.unwrap());
+        assert!(!policy.authorize(&denied).await.unwrap());
     }
 
-    #[test]
-    fn parses_mixed_ss58_and_hex_with_comments() {
+    #[tokio::test]
+    async fn parses_mixed_ss58_and_hex_with_comments() {
         let a = sensor(3);
         let b = sensor(4);
         let contents = format!(
@@ -135,8 +141,8 @@ mod tests {
         );
         let policy = Whitelist::from_str_lines(&contents).unwrap();
         assert_eq!(policy.len(), 2);
-        assert!(policy.authorize(&a));
-        assert!(policy.authorize(&b));
+        assert!(policy.authorize(&a).await.unwrap());
+        assert!(policy.authorize(&b).await.unwrap());
     }
 
     #[test]
@@ -145,10 +151,10 @@ mod tests {
         assert!(err.contains("line 1"), "{err}");
     }
 
-    #[test]
-    fn empty_whitelist_denies_all() {
+    #[tokio::test]
+    async fn empty_whitelist_denies_all() {
         let policy = Whitelist::default();
         assert!(policy.is_empty());
-        assert!(!policy.authorize(&sensor(1)));
+        assert!(!policy.authorize(&sensor(1)).await.unwrap());
     }
 }

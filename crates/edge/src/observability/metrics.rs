@@ -39,6 +39,21 @@ pub const VALIDATION_REJECTED_TOTAL: &str = "edge_validation_rejected_total";
 pub const DEDUP_DROPPED_TOTAL: &str = "edge_dedup_dropped_total";
 /// Envelopes rejected by the authorization policy (counter).
 pub const AUTH_REJECTED_TOTAL: &str = "edge_auth_rejected_total";
+/// CPS authorization decisions served from the cache, by `decision` (counter).
+pub const AUTH_CPS_CACHE_HIT_TOTAL: &str = "edge_auth_cps_cache_hit_total";
+/// CPS authorization lookups that missed the cache (counter).
+pub const AUTH_CPS_CACHE_MISS_TOTAL: &str = "edge_auth_cps_cache_miss_total";
+/// Authorization lookups that failed without a decision (counter).
+pub const AUTH_CPS_LOOKUP_ERROR_TOTAL: &str = "edge_auth_cps_lookup_error_total";
+/// Entries currently held by the CPS authorization cache (gauge).
+pub const AUTH_CPS_CACHE_ENTRIES: &str = "edge_auth_cps_cache_entries";
+/// Times the pipeline paused ingestion because too many messages were already
+/// waiting for an authorization lookup (counter).
+pub const AUTH_BACKPRESSURE_TOTAL: &str = "edge_auth_backpressure_total";
+/// Messages currently waiting for an authorization lookup (gauge).
+pub const AUTH_PENDING: &str = "edge_auth_pending";
+/// Authorization lookups currently running (gauge).
+pub const AUTH_LOOKUPS_IN_FLIGHT: &str = "edge_auth_lookups_in_flight";
 /// Accepted envelopes published to GossipSub (counter).
 pub const PUBLISH_TOTAL: &str = "edge_publish_total";
 /// Currently connected libp2p peers (gauge).
@@ -132,6 +147,34 @@ fn describe() {
     metrics::describe_counter!(
         AUTH_REJECTED_TOTAL,
         "Envelopes rejected by the authorization policy"
+    );
+    metrics::describe_counter!(
+        AUTH_CPS_CACHE_HIT_TOTAL,
+        "CPS authorization decisions served from the cache, by decision"
+    );
+    metrics::describe_counter!(
+        AUTH_CPS_CACHE_MISS_TOTAL,
+        "CPS authorization lookups that missed the cache"
+    );
+    metrics::describe_counter!(
+        AUTH_CPS_LOOKUP_ERROR_TOTAL,
+        "Authorization lookups that failed without a decision"
+    );
+    metrics::describe_gauge!(
+        AUTH_CPS_CACHE_ENTRIES,
+        "Entries currently held by the CPS authorization cache"
+    );
+    metrics::describe_counter!(
+        AUTH_BACKPRESSURE_TOTAL,
+        "Times ingestion paused because the authorization queue was full"
+    );
+    metrics::describe_gauge!(
+        AUTH_PENDING,
+        "Messages currently waiting for an authorization lookup"
+    );
+    metrics::describe_gauge!(
+        AUTH_LOOKUPS_IN_FLIGHT,
+        "Authorization lookups currently running"
     );
     metrics::describe_counter!(PUBLISH_TOTAL, "Accepted envelopes published to GossipSub");
     metrics::describe_gauge!(CONNECTED_PEERS, "Currently connected libp2p peers");
@@ -257,6 +300,13 @@ mod tests {
             VALIDATION_REJECTED_TOTAL,
             DEDUP_DROPPED_TOTAL,
             AUTH_REJECTED_TOTAL,
+            AUTH_CPS_CACHE_HIT_TOTAL,
+            AUTH_CPS_CACHE_MISS_TOTAL,
+            AUTH_CPS_LOOKUP_ERROR_TOTAL,
+            AUTH_CPS_CACHE_ENTRIES,
+            AUTH_BACKPRESSURE_TOTAL,
+            AUTH_PENDING,
+            AUTH_LOOKUPS_IN_FLIGHT,
             PUBLISH_TOTAL,
             CONNECTED_PEERS,
             MESHTASTIC_PACKETS_RECEIVED_TOTAL,

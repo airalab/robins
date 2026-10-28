@@ -113,10 +113,13 @@ pub enum AuthMode {
     None,
     /// Accept only envelopes whose `sensor_id` is in the whitelist.
     Whitelist,
+    /// Accept only sensors whose CPS node is a strict descendant of the
+    /// configured `sensors.social` root node (see the `cps_*` fields).
+    Cps,
 }
 
 /// Authentication policy configuration (`[auth]`).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuthConfig {
     /// Selected authentication mode.
@@ -124,6 +127,65 @@ pub struct AuthConfig {
     /// Path to a whitelist file (one SS58 or `0x`-prefixed hex `sensor_id`
     /// per line). Required when [`AuthMode::Whitelist`] is selected.
     pub file: Option<PathBuf>,
+    /// CPS node id of the `sensors.social` root. A sensor is authorized when
+    /// its CPS node is a strict descendant of it. Required for [`AuthMode::Cps`].
+    pub cps_root_node_id: Option<u64>,
+    /// Expected genesis hash (`0x` + 64 hex digits) of the CPS chain; guards
+    /// against pointing the gateway at the wrong network. Required for
+    /// [`AuthMode::Cps`].
+    pub cps_expected_genesis_hash: Option<String>,
+    /// Hard bound on cached authorization decisions (allow and deny combined).
+    pub cps_cache_capacity: usize,
+    /// How long a denial is cached, in seconds. Allows are cached until
+    /// eviction or restart.
+    pub cps_negative_ttl_secs: u64,
+    /// Timeout of one CPS authorization lookup, in seconds.
+    pub cps_query_timeout_secs: u64,
+    /// Most CPS lookups running against the chain at the same time.
+    pub cps_max_concurrent_lookups: usize,
+    /// Most verified messages parked while waiting for a CPS lookup (counting
+    /// those already being looked up). Further messages from sensors that are
+    /// not cached are dropped, so a flood of unknown sensors cannot grow memory
+    /// or delay sensors that are cached.
+    pub cps_max_pending: usize,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            mode: AuthMode::None,
+            file: None,
+            cps_root_node_id: None,
+            cps_expected_genesis_hash: None,
+            cps_cache_capacity: 8192,
+            cps_negative_ttl_secs: 60,
+            cps_query_timeout_secs: 10,
+            cps_max_concurrent_lookups: 8,
+            cps_max_pending: 256,
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Parse `cps_expected_genesis_hash` into raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a description if the value is missing or not `0x` followed by
+    /// 64 hex digits.
+    pub fn expected_genesis_hash(&self) -> Result<[u8; 32], String> {
+        let raw = self
+            .cps_expected_genesis_hash
+            .as_deref()
+            .ok_or("auth.cps_expected_genesis_hash is required")?;
+        let digits = raw
+            .strip_prefix("0x")
+            .ok_or("auth.cps_expected_genesis_hash must start with \"0x\"")?;
+        let bytes = hex::decode(digits)
+            .map_err(|e| format!("auth.cps_expected_genesis_hash is not valid hex: {e}"))?;
+        <[u8; 32]>::try_from(bytes.as_slice())
+            .map_err(|_| "auth.cps_expected_genesis_hash must be 32 bytes".to_string())
+    }
 }
 
 /// libp2p GossipSub publisher configuration (`[pubsub]`).
@@ -254,6 +316,10 @@ pub struct KuboConfig {
 
 /// Robonomics CPS anchoring configuration (`[blockchain]`).
 ///
+/// The section also holds the chain connection: CPS authorization
+/// (`[auth] mode = "cps"`) and anchoring read the chain through the single
+/// connection to `endpoint`, whether or not anchoring is `enabled`.
+///
 /// When enabled, accepted envelopes are durably batched (see `[batcher]`,
 /// persisted in `[storage].path`) and each batch is written to the CPS node
 /// with `set_payload`.
@@ -262,7 +328,9 @@ pub struct KuboConfig {
 pub struct BlockchainConfig {
     /// Whether blockchain anchoring is enabled.
     pub enabled: bool,
-    /// Robonomics RPC endpoint (websocket).
+    /// Robonomics RPC endpoint (`ws://` or `wss://`) shared by CPS authorization
+    /// and anchoring. Omit it to use one embedded light client for both,
+    /// started on first use and synchronized in the background.
     pub endpoint: Option<String>,
     /// Path to a file containing the anchoring account secret URI.
     pub key_file: Option<PathBuf>,
@@ -392,15 +460,53 @@ impl Config {
         Ok(config)
     }
 
+    /// Validates the `[auth]` settings of [`AuthMode::Cps`].
+    fn validate_cps_auth(&self) -> Result<(), ConfigError> {
+        let auth = &self.auth;
+        if auth.cps_root_node_id.is_none() {
+            return Err(ConfigError::Invalid(
+                "auth.mode = \"cps\" requires auth.cps_root_node_id".to_string(),
+            ));
+        }
+        auth.expected_genesis_hash().map_err(ConfigError::Invalid)?;
+        for (name, value) in [
+            ("auth.cps_cache_capacity", auth.cps_cache_capacity as u64),
+            ("auth.cps_negative_ttl_secs", auth.cps_negative_ttl_secs),
+            ("auth.cps_query_timeout_secs", auth.cps_query_timeout_secs),
+            (
+                "auth.cps_max_concurrent_lookups",
+                auth.cps_max_concurrent_lookups as u64,
+            ),
+            ("auth.cps_max_pending", auth.cps_max_pending as u64),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::Invalid(format!(
+                    "{name} must be greater than zero"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Validates cross-field invariants that serde cannot express.
     ///
     /// This backs `edge config check`: it catches missing required fields,
     /// conflicting settings, and provider misconfiguration.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if let Some(endpoint) = &self.blockchain.endpoint {
+            if !(endpoint.starts_with("ws://") || endpoint.starts_with("wss://")) {
+                return Err(ConfigError::Invalid(
+                    "blockchain.endpoint must be a ws:// or wss:// URL".to_string(),
+                ));
+            }
+        }
         if self.auth.mode == AuthMode::Whitelist && self.auth.file.is_none() {
             return Err(ConfigError::Invalid(
                 "auth.mode = \"whitelist\" requires auth.file".to_string(),
             ));
+        }
+        if self.auth.mode == AuthMode::Cps {
+            self.validate_cps_auth()?;
         }
 
         if self.ipfs.enabled {
@@ -499,11 +605,6 @@ impl Config {
         self.batcher.validate().map_err(ConfigError::Invalid)?;
 
         if self.blockchain.enabled {
-            if self.blockchain.endpoint.is_none() {
-                return Err(ConfigError::Invalid(
-                    "blockchain.enabled = true requires blockchain.endpoint".to_string(),
-                ));
-            }
             if self.blockchain.key_file.is_none() {
                 return Err(ConfigError::Invalid(
                     "blockchain.enabled = true requires blockchain.key_file".to_string(),
@@ -561,6 +662,7 @@ mod tests {
         cfg.auth = AuthConfig {
             mode: AuthMode::Whitelist,
             file: Some("/etc/edge/whitelist.txt".into()),
+            ..AuthConfig::default()
         };
         assert!(!cfg.http_open_relay());
 
@@ -619,9 +721,70 @@ mod tests {
             auth: AuthConfig {
                 mode: AuthMode::Whitelist,
                 file: None,
+                ..AuthConfig::default()
             },
             ..Default::default()
         };
+        assert!(cfg.validate().is_err());
+    }
+
+    fn cps_auth_config() -> Config {
+        Config {
+            auth: AuthConfig {
+                mode: AuthMode::Cps,
+                cps_root_node_id: Some(12345),
+                cps_expected_genesis_hash: Some(format!("0x{}", "ab".repeat(32))),
+                ..AuthConfig::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn cps_auth_valid_config_is_accepted() {
+        cps_auth_config().validate().unwrap();
+        let toml = format!(
+            r#"
+            [auth]
+            mode = "cps"
+            cps_root_node_id = 7
+            cps_expected_genesis_hash = "0x{}"
+            cps_cache_capacity = 16
+        "#,
+            "ab".repeat(32)
+        );
+        let cfg: Config = toml::from_str(&toml).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.auth.mode, AuthMode::Cps);
+        assert_eq!(cfg.auth.cps_negative_ttl_secs, 60);
+    }
+
+    #[test]
+    fn cps_auth_requires_root_and_genesis() {
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_root_node_id = None;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_expected_genesis_hash = None;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn cps_auth_rejects_bad_values() {
+        for genesis in ["ab", "0xzz", "0xabcd"] {
+            let mut cfg = cps_auth_config();
+            cfg.auth.cps_expected_genesis_hash = Some(genesis.into());
+            assert!(cfg.validate().is_err(), "{genesis}");
+        }
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_cache_capacity = 0;
+        assert!(cfg.validate().is_err());
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_negative_ttl_secs = 0;
+        assert!(cfg.validate().is_err());
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_query_timeout_secs = 0;
         assert!(cfg.validate().is_err());
     }
 
@@ -708,6 +871,51 @@ mod tests {
 
         let mut cfg = anchoring();
         cfg.blockchain.retry_min_secs = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn cps_auth_rejects_zero_lookup_bounds() {
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_max_concurrent_lookups = 0;
+        assert!(cfg.validate().is_err());
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_max_pending = 0;
+        assert!(cfg.validate().is_err());
+
+        let cfg = cps_auth_config();
+        assert_eq!(cfg.auth.cps_max_concurrent_lookups, 8);
+        assert_eq!(cfg.auth.cps_max_pending, 256);
+    }
+
+    #[test]
+    fn blockchain_endpoint_is_optional() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [blockchain]
+            endpoint = "wss://rpc.example"
+        "#,
+        )
+        .unwrap();
+        cfg.validate().unwrap();
+
+        // Without an endpoint anchoring and authorization share the embedded
+        // light client.
+        let mut cfg = anchoring();
+        cfg.blockchain.endpoint = None;
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn per_subsystem_endpoints_are_rejected() {
+        assert!(toml::from_str::<Config>("[auth]\ncps_endpoint = \"wss://x\"").is_err());
+        assert!(toml::from_str::<Config>("[chain]\nendpoint = \"wss://x\"").is_err());
+    }
+
+    #[test]
+    fn blockchain_endpoint_must_be_a_websocket() {
+        let mut cfg = Config::default();
+        cfg.blockchain.endpoint = Some("http://rpc".into());
         assert!(cfg.validate().is_err());
     }
 }
