@@ -181,11 +181,16 @@ impl Anchor {
 
 /// Obtain the shared chain connection and verify the anchoring account on it.
 async fn connect_target(
-    chains: &ChainRegistry,
+    chains: &Arc<ChainRegistry>,
     chain: &ChainConfig,
 ) -> Result<LibcpsTarget, AnchorError> {
-    let connection = chains.get(chain.endpoint.as_deref()).await?;
-    LibcpsTarget::connect(connection, &chain.suri, chain.node).await
+    LibcpsTarget::connect(
+        chains.clone(),
+        chain.endpoint.clone(),
+        &chain.suri,
+        chain.node,
+    )
+    .await
 }
 
 /// Connect to the chain (retrying transient failures), then run an

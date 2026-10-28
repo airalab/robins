@@ -100,6 +100,10 @@ impl AuthPolicy for Whitelist {
         AuthMode::Whitelist
     }
 
+    fn try_authorize(&self, sensor_id: &SensorId) -> Option<bool> {
+        Some(self.allowed.contains(sensor_id))
+    }
+
     async fn authorize(&self, sensor_id: &SensorId) -> Result<bool, AuthError> {
         Ok(self.allowed.contains(sensor_id))
     }

@@ -18,7 +18,7 @@
 //! [`CpsTarget`] backed by a live `libcps` connection.
 
 use super::{AnchorError, Confirmation, CpsTarget};
-use crate::chain::Chain;
+use crate::chain::ChainRegistry;
 use async_trait::async_trait;
 use libcps::crypto::{Signer, Sr25519};
 use libcps::{Capability, Error as CpsError, NodeId};
@@ -26,23 +26,33 @@ use std::sync::Arc;
 
 /// A CPS node reachable through `libcps`, with the account that signs for it.
 pub struct LibcpsTarget {
-    /// Shared chain connection (and the embedded light node behind it, if any).
-    chain: Arc<Chain>,
+    /// Shared connections; asked again for every submission so a connection
+    /// replaced after a failure is picked up.
+    chains: Arc<ChainRegistry>,
+    /// RPC endpoint, `None` for the embedded light client.
+    endpoint: Option<String>,
     signer: Signer<Sr25519>,
     node: NodeId,
 }
 
 impl LibcpsTarget {
-    /// Verify over `chain` that the account can write to `node`.
+    /// Verify over the shared connection to `endpoint` that the account can
+    /// write to `node`.
     ///
     /// # Errors
     ///
     /// Connection failures are transient; an invalid key, a missing node or a
     /// missing write capability are permanent.
-    pub async fn connect(chain: Arc<Chain>, suri: &str, node: NodeId) -> Result<Self, AnchorError> {
+    pub async fn connect(
+        chains: Arc<ChainRegistry>,
+        endpoint: Option<String>,
+        suri: &str,
+        node: NodeId,
+    ) -> Result<Self, AnchorError> {
         let signer = Signer::<Sr25519>::from_suri(suri)
             .map_err(|e| AnchorError::Permanent(format!("invalid signing key: {e}")))?;
         let account = signer.account_id();
+        let chain = chains.get(endpoint.as_deref()).await?;
         let can_write = chain
             .cps()
             .node(node)
@@ -55,7 +65,8 @@ impl LibcpsTarget {
             )));
         }
         Ok(Self {
-            chain,
+            chains,
+            endpoint,
             signer,
             node,
         })
@@ -65,14 +76,13 @@ impl LibcpsTarget {
 #[async_trait]
 impl CpsTarget for LibcpsTarget {
     async fn set_payload(&self, payload: &[u8]) -> Result<Confirmation, AnchorError> {
-        let tx = self
-            .chain
+        let chain = self.chains.get(self.endpoint.as_deref()).await?;
+        let tx = chain
             .cps()
             .node(self.node)
             .set_payload(payload)
             .map_err(classify)?;
-        let receipt = self
-            .chain
+        let receipt = chain
             .cps()
             .submit_finalized(&tx, &self.signer)
             .await

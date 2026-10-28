@@ -26,7 +26,10 @@
 //! 2. **Authorize** the verified `sensor_id` against the configured
 //!    [`AuthPolicy`]; rejects increment [`AUTH_REJECTED_TOTAL`]. A policy that
 //!    cannot decide (e.g. the chain is unreachable) fails closed: the message is
-//!    dropped and [`AUTH_CPS_LOOKUP_ERROR_TOTAL`] is incremented.
+//!    dropped and [`AUTH_CPS_LOOKUP_ERROR_TOTAL`] is incremented. Decisions that
+//!    need a slow lookup run in a bounded asynchronous stage (see [`authorize`]),
+//!    so a pending lookup never delays sensors whose decision is already known.
+//!    Only authorized envelopes reach the next steps.
 //! 3. **Deduplicate** by [`EnvelopeId`] via a bounded TTL [`DedupCache`];
 //!    duplicates increment [`DEDUP_DROPPED_TOTAL`].
 //! 4. **Fan out** the resulting [`AcceptedMessage`] to every configured
@@ -46,21 +49,26 @@
 //! Only then is the message dropped, and its dedup entry is forgotten so a
 //! retransmission is not suppressed.
 
+pub mod authorize;
 pub mod batch_sink;
 pub mod dedup;
 
+pub use authorize::AuthLimits;
 pub use batch_sink::BatchSink;
 pub use dedup::DedupCache;
 
 use crate::auth::AuthPolicy;
 use crate::ingress::{IngressMessage, IngressReceiver, TransportMetadata};
 use crate::observability::metrics::{
-    AUTH_CPS_LOOKUP_ERROR_TOTAL, AUTH_REJECTED_TOTAL, DEDUP_DROPPED_TOTAL,
-    VALIDATION_REJECTED_TOTAL,
+    AUTH_CPS_LOOKUP_ERROR_TOTAL, AUTH_PENDING_DROPPED_TOTAL, AUTH_REJECTED_TOTAL,
+    DEDUP_DROPPED_TOTAL, VALIDATION_REJECTED_TOTAL,
 };
-use crate::protocol::{envelope_id, verify_envelope, EnvelopeId, SensorId, SignedEnvelope};
+use crate::protocol::{
+    envelope_id, verify_envelope, EnvelopeId, SensorId, SignedEnvelope, VerifiedEnvelope,
+};
 use crate::shutdown::ShutdownSignal;
 use async_trait::async_trait;
+use authorize::{Admission, AuthStage, Resolution};
 use bytes::Bytes;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -170,10 +178,21 @@ impl MessageSink for ChannelSink {
     }
 }
 
+/// A message whose signature has been verified, on its way through
+/// authorization.
+pub(crate) struct Verified {
+    /// The message as received.
+    message: IngressMessage,
+    /// Its verified identity and envelope.
+    verified: VerifiedEnvelope,
+}
+
 /// The acceptance pipeline: owns the auth policy, dedup cache and sinks.
 pub struct Pipeline {
     /// Authorization policy consulted after signature verification.
-    auth: Box<dyn AuthPolicy>,
+    auth: Arc<dyn AuthPolicy>,
+    /// Bounds of the asynchronous authorization stage.
+    auth_limits: AuthLimits,
     /// Bounded TTL duplicate-suppression cache.
     dedup: DedupCache,
     /// Fan-out targets for accepted messages.
@@ -190,11 +209,18 @@ impl Pipeline {
         sinks: Vec<Box<dyn MessageSink>>,
     ) -> Self {
         Self {
-            auth,
+            auth: Arc::from(auth),
+            auth_limits: AuthLimits::default(),
             dedup,
             sinks,
             required_retry: (REQUIRED_RETRY_INITIAL, REQUIRED_RETRY_MAX),
         }
+    }
+
+    /// Bound the authorization stage (see [`AuthLimits`]).
+    pub fn with_auth_limits(mut self, limits: AuthLimits) -> Self {
+        self.auth_limits = limits;
+        self
     }
 
     /// Override the back-off used when retrying required sinks.
@@ -206,20 +232,28 @@ impl Pipeline {
 
     /// Drain `rx` and process messages until the channel closes or `shutdown`
     /// fires.
+    ///
+    /// Once `rx` is closed, messages still waiting for an authorization lookup
+    /// are decided before returning; `shutdown` abandons them instead.
     pub async fn run(mut self, mut rx: IngressReceiver, mut shutdown: ShutdownSignal) {
         tracing::info!(sinks = self.sinks.len(), "pipeline started");
-        loop {
+        let mut stage = AuthStage::new(self.auth.clone(), self.auth_limits);
+        let mut ingress_open = true;
+        while ingress_open || stage.is_busy() {
             tokio::select! {
                 _ = shutdown.recv() => {
                     tracing::info!("pipeline shutting down");
                     break;
                 }
-                maybe = rx.recv() => {
+                resolution = stage.next_resolution(), if stage.is_busy() => {
+                    self.resolve(resolution, &mut shutdown).await;
+                }
+                maybe = rx.recv(), if ingress_open => {
                     match maybe {
-                        Some(message) => self.process(message, &mut shutdown).await,
+                        Some(message) => self.process(message, &mut stage, &mut shutdown).await,
                         None => {
-                            tracing::info!("ingress channel closed; pipeline stopping");
-                            break;
+                            tracing::info!("ingress channel closed; pipeline draining");
+                            ingress_open = false;
                         }
                     }
                 }
@@ -227,8 +261,14 @@ impl Pipeline {
         }
     }
 
-    /// Apply the canonical verify → authorize → deduplicate → fan-out sequence.
-    async fn process(&mut self, message: IngressMessage, shutdown: &mut ShutdownSignal) {
+    /// Verify a message, then authorize it: at once when the decision is known,
+    /// otherwise through `stage`.
+    async fn process(
+        &mut self,
+        message: IngressMessage,
+        stage: &mut AuthStage,
+        shutdown: &mut ShutdownSignal,
+    ) {
         let transport = message.transport.transport.as_str();
 
         let verified = match verify_envelope(&message.envelope) {
@@ -240,26 +280,56 @@ impl Pipeline {
             }
         };
 
-        // A lookup may take a while (chain read); keep shutdown responsive.
-        let decision = tokio::select! {
-            biased;
-            _ = shutdown.recv() => return,
-            decision = self.auth.authorize(&verified.sensor_id) => decision,
-        };
-        match decision {
-            Ok(true) => {}
-            Ok(false) => {
-                metrics::counter!(AUTH_REJECTED_TOTAL, "transport" => transport).increment(1);
-                tracing::debug!(sensor_id = %verified.sensor_id, transport, "rejected: not authorized");
-                return;
-            }
-            Err(err) => {
-                metrics::counter!(AUTH_CPS_LOOKUP_ERROR_TOTAL, "transport" => transport)
+        match stage.admit(Verified { message, verified }) {
+            Admission::Decided(allowed, message) => self.decide(allowed, message, shutdown).await,
+            Admission::Parked => {}
+            Admission::Overflow(message) => {
+                let transport = message.message.transport.transport.as_str();
+                metrics::counter!(AUTH_PENDING_DROPPED_TOTAL, "transport" => transport)
                     .increment(1);
-                tracing::warn!(%err, sensor_id = %verified.sensor_id, transport, "dropped: authorization lookup failed");
-                return;
+                tracing::warn!(
+                    sensor_id = %message.verified.sensor_id,
+                    transport,
+                    "dropped: too many messages waiting for authorization"
+                );
             }
         }
+    }
+
+    /// Apply the outcome of a lookup to every message that waited for it.
+    async fn resolve(&mut self, resolution: Resolution, shutdown: &mut ShutdownSignal) {
+        for message in resolution.messages {
+            match &resolution.decision {
+                Ok(allowed) => self.decide(*allowed, message, shutdown).await,
+                Err(err) => {
+                    let transport = message.message.transport.transport.as_str();
+                    metrics::counter!(AUTH_CPS_LOOKUP_ERROR_TOTAL, "transport" => transport)
+                        .increment(1);
+                    tracing::warn!(%err, sensor_id = %message.verified.sensor_id, transport, "dropped: authorization lookup failed");
+                }
+            }
+        }
+    }
+
+    /// Act on an authorization decision: only an authorized message goes on to
+    /// deduplication and the sinks.
+    async fn decide(&mut self, allowed: bool, message: Verified, shutdown: &mut ShutdownSignal) {
+        if allowed {
+            self.accept(message, shutdown).await;
+        } else {
+            let transport = message.message.transport.transport.as_str();
+            metrics::counter!(AUTH_REJECTED_TOTAL, "transport" => transport).increment(1);
+            tracing::debug!(sensor_id = %message.verified.sensor_id, transport, "rejected: not authorized");
+        }
+    }
+
+    /// Deduplicate an authorized message and fan it out.
+    async fn accept(
+        &mut self,
+        Verified { message, verified }: Verified,
+        shutdown: &mut ShutdownSignal,
+    ) {
+        let transport = message.transport.transport.as_str();
 
         let id = envelope_id(&message.raw_envelope);
         if !self.dedup.insert_if_new(id) {
@@ -639,7 +709,276 @@ mod tests {
 
         let message = ingress_message(&identity, b"lost");
         let id = envelope_id(&message.raw_envelope);
-        pipeline.process(message, &mut shutdown).await;
+        let mut stage = AuthStage::new(pipeline.auth.clone(), AuthLimits::default());
+        pipeline.process(message, &mut stage, &mut shutdown).await;
         assert!(pipeline.dedup.insert_if_new(id));
+    }
+
+    /// A policy that knows some sensors at once and needs a gated "lookup" for
+    /// the rest, recording how the lookups overlapped.
+    struct GatedAuth {
+        known: Vec<SensorId>,
+        denied: Vec<SensorId>,
+        failing: Vec<SensorId>,
+        /// Lookups proceed once permits are added.
+        gate: tokio::sync::Semaphore,
+        lookups: AtomicUsize,
+        in_flight: Arc<AtomicUsize>,
+        max_in_flight: AtomicUsize,
+    }
+
+    /// Counts a running lookup, also when it is aborted.
+    struct InFlight(Arc<AtomicUsize>);
+
+    impl Drop for InFlight {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    impl GatedAuth {
+        fn new(known: &[&SensorIdentity]) -> Arc<Self> {
+            Arc::new(Self {
+                known: known.iter().map(|i| i.sensor_id()).collect(),
+                denied: Vec::new(),
+                failing: Vec::new(),
+                gate: tokio::sync::Semaphore::new(0),
+                lookups: AtomicUsize::new(0),
+                in_flight: Arc::new(AtomicUsize::new(0)),
+                max_in_flight: AtomicUsize::new(0),
+            })
+        }
+
+        fn open(&self) {
+            self.gate.add_permits(usize::MAX >> 4);
+        }
+    }
+
+    #[async_trait]
+    impl AuthPolicy for Arc<GatedAuth> {
+        fn mode(&self) -> crate::config::AuthMode {
+            crate::config::AuthMode::Cps
+        }
+
+        fn try_authorize(&self, sensor_id: &SensorId) -> Option<bool> {
+            self.known.contains(sensor_id).then_some(true)
+        }
+
+        async fn authorize(&self, sensor_id: &SensorId) -> Result<bool, crate::auth::AuthError> {
+            self.lookups.fetch_add(1, Ordering::SeqCst);
+            let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(now, Ordering::SeqCst);
+            let _running = InFlight(self.in_flight.clone());
+            self.gate.acquire().await.unwrap().forget();
+            if self.failing.contains(sensor_id) {
+                return Err(crate::auth::AuthError::Unavailable("chain down".into()));
+            }
+            Ok(!self.denied.contains(sensor_id))
+        }
+    }
+
+    /// A running pipeline fed through its ingress channel.
+    struct Running {
+        tx: crate::ingress::IngressSender,
+        delivered: mpsc::Receiver<Arc<AcceptedMessage>>,
+        controller: ShutdownController,
+        handle: tokio::task::JoinHandle<()>,
+    }
+
+    fn start(auth: &Arc<GatedAuth>, limits: AuthLimits) -> Running {
+        let (sink, delivered) = ChannelSink::new("test", 1024);
+        let pipeline = Pipeline::new(Box::new(auth.clone()), dedup(), vec![Box::new(sink)])
+            .with_auth_limits(limits);
+        let (tx, ingress_rx) = channel(1024);
+        let controller = ShutdownController::new();
+        let handle = tokio::spawn(pipeline.run(ingress_rx, controller.subscribe()));
+        Running {
+            tx,
+            delivered,
+            controller,
+            handle,
+        }
+    }
+
+    async fn next_delivery(running: &mut Running) -> Arc<AcceptedMessage> {
+        tokio::time::timeout(Duration::from_secs(5), running.delivered.recv())
+            .await
+            .expect("a message is delivered in time")
+            .expect("sink open")
+    }
+
+    async fn settle() {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    fn identity(seed: u8) -> SensorIdentity {
+        SensorIdentity::from_secret_bytes(&[seed; 32])
+    }
+
+    #[tokio::test]
+    async fn slow_lookup_does_not_delay_a_known_sensor() {
+        let (cached, unknown) = (identity(1), identity(2));
+        let auth = GatedAuth::new(&[&cached]);
+        let mut running = start(&auth, AuthLimits::default());
+
+        running
+            .tx
+            .send(ingress_message(&unknown, b"slow"))
+            .await
+            .unwrap();
+        running
+            .tx
+            .send(ingress_message(&cached, b"fast"))
+            .await
+            .unwrap();
+
+        let first = next_delivery(&mut running).await;
+        assert_eq!(first.sensor_id, cached.sensor_id());
+        assert_eq!(auth.lookups.load(Ordering::SeqCst), 1);
+
+        auth.open();
+        let second = next_delivery(&mut running).await;
+        assert_eq!(second.sensor_id, unknown.sensor_id());
+    }
+
+    #[tokio::test]
+    async fn lookups_and_waiting_messages_are_bounded() {
+        let cached = identity(1);
+        let auth = GatedAuth::new(&[&cached]);
+        let limits = AuthLimits {
+            max_concurrent: 3,
+            max_pending: 10,
+        };
+        let mut running = start(&auth, limits);
+
+        for seed in 10..110 {
+            running
+                .tx
+                .send(ingress_message(&identity(seed), b"flood"))
+                .await
+                .unwrap();
+        }
+        settle().await;
+
+        assert_eq!(auth.in_flight.load(Ordering::SeqCst), 3);
+        assert_eq!(auth.max_in_flight.load(Ordering::SeqCst), 3);
+
+        // Overload sheds unknown sensors but still serves known ones.
+        running
+            .tx
+            .send(ingress_message(&cached, b"still served"))
+            .await
+            .unwrap();
+        assert_eq!(
+            next_delivery(&mut running).await.sensor_id,
+            cached.sensor_id()
+        );
+
+        auth.open();
+        for _ in 0..10 {
+            next_delivery(&mut running).await;
+        }
+        settle().await;
+        assert!(running.delivered.try_recv().is_err(), "the rest was shed");
+        assert_eq!(auth.lookups.load(Ordering::SeqCst), 10);
+        assert_eq!(auth.max_in_flight.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn concurrent_misses_for_a_sensor_share_one_lookup() {
+        let sensor = identity(3);
+        let auth = GatedAuth::new(&[]);
+        let mut running = start(&auth, AuthLimits::default());
+
+        for n in 0..5u8 {
+            running
+                .tx
+                .send(ingress_message(&sensor, &[n]))
+                .await
+                .unwrap();
+        }
+        settle().await;
+        assert_eq!(auth.lookups.load(Ordering::SeqCst), 1);
+
+        auth.open();
+        for _ in 0..5 {
+            assert_eq!(
+                next_delivery(&mut running).await.sensor_id,
+                sensor.sensor_id()
+            );
+        }
+        assert_eq!(auth.lookups.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn denied_and_failed_lookups_deliver_nothing() {
+        let (denied, failing, allowed) = (identity(4), identity(5), identity(6));
+        let auth = Arc::new(GatedAuth {
+            denied: vec![denied.sensor_id()],
+            failing: vec![failing.sensor_id()],
+            ..Arc::try_unwrap(GatedAuth::new(&[])).ok().unwrap()
+        });
+        let mut running = start(&auth, AuthLimits::default());
+
+        for identity in [&denied, &denied, &failing, &failing, &allowed] {
+            running
+                .tx
+                .send(ingress_message(identity, b"x"))
+                .await
+                .unwrap();
+        }
+        auth.open();
+
+        assert_eq!(
+            next_delivery(&mut running).await.sensor_id,
+            allowed.sensor_id()
+        );
+        settle().await;
+        assert!(running.delivered.try_recv().is_err());
+        assert_eq!(auth.lookups.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn closing_ingress_still_decides_waiting_messages() {
+        let sensor = identity(7);
+        let auth = GatedAuth::new(&[]);
+        let mut running = start(&auth, AuthLimits::default());
+
+        running
+            .tx
+            .send(ingress_message(&sensor, b"late"))
+            .await
+            .unwrap();
+        drop(running.tx);
+        settle().await;
+        assert!(!running.handle.is_finished(), "waits for the lookup");
+
+        auth.open();
+        running.handle.await.unwrap();
+        assert!(running.delivered.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn shutdown_abandons_running_lookups() {
+        let auth = GatedAuth::new(&[]);
+        let running = start(&auth, AuthLimits::default());
+
+        for seed in 20..30 {
+            running
+                .tx
+                .send(ingress_message(&identity(seed), b"stuck"))
+                .await
+                .unwrap();
+        }
+        settle().await;
+        assert!(auth.in_flight.load(Ordering::SeqCst) > 0);
+
+        running.controller.trigger();
+        tokio::time::timeout(Duration::from_secs(5), running.handle)
+            .await
+            .expect("pipeline stops with lookups pending")
+            .unwrap();
+        settle().await;
+        assert_eq!(auth.in_flight.load(Ordering::SeqCst), 0, "lookups aborted");
     }
 }

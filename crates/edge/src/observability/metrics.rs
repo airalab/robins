@@ -47,6 +47,13 @@ pub const AUTH_CPS_CACHE_MISS_TOTAL: &str = "edge_auth_cps_cache_miss_total";
 pub const AUTH_CPS_LOOKUP_ERROR_TOTAL: &str = "edge_auth_cps_lookup_error_total";
 /// Entries currently held by the CPS authorization cache (gauge).
 pub const AUTH_CPS_CACHE_ENTRIES: &str = "edge_auth_cps_cache_entries";
+/// Messages dropped because too many were already waiting for an authorization
+/// lookup (counter).
+pub const AUTH_PENDING_DROPPED_TOTAL: &str = "edge_auth_pending_dropped_total";
+/// Messages currently waiting for an authorization lookup (gauge).
+pub const AUTH_PENDING: &str = "edge_auth_pending";
+/// Authorization lookups currently running (gauge).
+pub const AUTH_LOOKUPS_IN_FLIGHT: &str = "edge_auth_lookups_in_flight";
 /// Accepted envelopes published to GossipSub (counter).
 pub const PUBLISH_TOTAL: &str = "edge_publish_total";
 /// Currently connected libp2p peers (gauge).
@@ -156,6 +163,18 @@ fn describe() {
     metrics::describe_gauge!(
         AUTH_CPS_CACHE_ENTRIES,
         "Entries currently held by the CPS authorization cache"
+    );
+    metrics::describe_counter!(
+        AUTH_PENDING_DROPPED_TOTAL,
+        "Messages dropped because the authorization queue was full"
+    );
+    metrics::describe_gauge!(
+        AUTH_PENDING,
+        "Messages currently waiting for an authorization lookup"
+    );
+    metrics::describe_gauge!(
+        AUTH_LOOKUPS_IN_FLIGHT,
+        "Authorization lookups currently running"
     );
     metrics::describe_counter!(PUBLISH_TOTAL, "Accepted envelopes published to GossipSub");
     metrics::describe_gauge!(CONNECTED_PEERS, "Currently connected libp2p peers");
@@ -285,6 +304,9 @@ mod tests {
             AUTH_CPS_CACHE_MISS_TOTAL,
             AUTH_CPS_LOOKUP_ERROR_TOTAL,
             AUTH_CPS_CACHE_ENTRIES,
+            AUTH_PENDING_DROPPED_TOTAL,
+            AUTH_PENDING,
+            AUTH_LOOKUPS_IN_FLIGHT,
             PUBLISH_TOTAL,
             CONNECTED_PEERS,
             MESHTASTIC_PACKETS_RECEIVED_TOTAL,

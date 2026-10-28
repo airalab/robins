@@ -86,6 +86,18 @@ pub trait AuthPolicy: Send + Sync {
     /// The configuration [`AuthMode`] this policy implements.
     fn mode(&self) -> AuthMode;
 
+    /// The decision for `sensor_id` if it is known without any I/O.
+    ///
+    /// The pipeline asks this first and answers such sensors immediately; only
+    /// when it returns `None` is the (possibly slow) [`authorize`] queued, so a
+    /// slow lookup for one sensor never delays sensors whose decision is known.
+    /// The default knows nothing.
+    ///
+    /// [`authorize`]: AuthPolicy::authorize
+    fn try_authorize(&self, _sensor_id: &SensorId) -> Option<bool> {
+        None
+    }
+
     /// Decide whether the (already verified) `sensor_id` is authorized.
     async fn authorize(&self, sensor_id: &SensorId) -> Result<bool, AuthError>;
 }
@@ -100,6 +112,10 @@ impl AuthPolicy for NoneAuth {
         AuthMode::None
     }
 
+    fn try_authorize(&self, _sensor_id: &SensorId) -> Option<bool> {
+        Some(true)
+    }
+
     async fn authorize(&self, _sensor_id: &SensorId) -> Result<bool, AuthError> {
         Ok(true)
     }
@@ -111,10 +127,12 @@ impl AuthPolicy for NoneAuth {
 /// (`[auth] file`); it is read eagerly so a missing or malformed file fails at
 /// startup rather than silently rejecting every message.
 ///
-/// For [`AuthMode::Cps`] the chain is read through `chains` and connected on
-/// first use, so the policy is built without touching the network.
+/// For [`AuthMode::Cps`] the chain at `endpoint` (`None`: embedded light client)
+/// is read through `chains` and connected on first use, so the policy is built
+/// without touching the network.
 pub fn from_config(
     config: &AuthConfig,
+    endpoint: Option<&str>,
     chains: Arc<ChainRegistry>,
 ) -> std::io::Result<Box<dyn AuthPolicy>> {
     match config.mode {
@@ -129,7 +147,7 @@ pub fn from_config(
             Ok(Box::new(Whitelist::from_file(path)?))
         }
         AuthMode::Cps => {
-            let policy = CpsAuth::from_config(config, chains)
+            let policy = CpsAuth::from_config(config, endpoint, chains)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
             Ok(Box::new(policy))
         }
@@ -155,7 +173,8 @@ mod tests {
 
     #[test]
     fn from_config_none_builds_none() {
-        let policy = from_config(&AuthConfig::default(), Arc::new(ChainRegistry::new())).unwrap();
+        let policy =
+            from_config(&AuthConfig::default(), None, Arc::new(ChainRegistry::new())).unwrap();
         assert_eq!(policy.mode(), AuthMode::None);
     }
 
@@ -165,7 +184,7 @@ mod tests {
             mode: AuthMode::Whitelist,
             ..AuthConfig::default()
         };
-        assert!(from_config(&config, Arc::new(ChainRegistry::new())).is_err());
+        assert!(from_config(&config, None, Arc::new(ChainRegistry::new())).is_err());
     }
 
     #[test]
@@ -174,7 +193,7 @@ mod tests {
             mode: AuthMode::Cps,
             ..AuthConfig::default()
         };
-        assert!(from_config(&config, Arc::new(ChainRegistry::new())).is_err());
+        assert!(from_config(&config, None, Arc::new(ChainRegistry::new())).is_err());
 
         let config = AuthConfig {
             mode: AuthMode::Cps,
@@ -182,7 +201,7 @@ mod tests {
             cps_expected_genesis_hash: Some(format!("0x{}", "00".repeat(32))),
             ..AuthConfig::default()
         };
-        let policy = from_config(&config, Arc::new(ChainRegistry::new())).unwrap();
+        let policy = from_config(&config, None, Arc::new(ChainRegistry::new())).unwrap();
         assert_eq!(policy.mode(), AuthMode::Cps);
     }
 }

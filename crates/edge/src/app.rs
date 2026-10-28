@@ -45,12 +45,12 @@ use crate::auth;
 use crate::batch_store::{reconcile_format, BatchStore, RedbBatchStore};
 use crate::batcher::Batcher;
 use crate::chain::ChainRegistry;
-use crate::config::Config;
+use crate::config::{AuthMode, Config};
 use crate::ingress::meshtastic::MeshtasticIngress;
 use crate::ingress::{self, Ingress, IngressSender};
 use crate::observability::{self, Health};
 use crate::p2p::{self, GossipConfig, GossipNode, PeerRegistry};
-use crate::pipeline::{BatchSink, ChannelSink, DedupCache, MessageSink, Pipeline};
+use crate::pipeline::{AuthLimits, BatchSink, ChannelSink, DedupCache, MessageSink, Pipeline};
 use crate::shutdown::ShutdownController;
 use anyhow::Context;
 use libcps::NodeId;
@@ -148,13 +148,24 @@ impl EdgeApp {
         }
 
         // Acceptance pipeline.
-        let policy =
-            auth::from_config(&config.auth, chains).context("failed to build auth policy")?;
+        let policy = auth::from_config(
+            &config.auth,
+            config.blockchain.endpoint.as_deref(),
+            chains.clone(),
+        )
+        .context("failed to build auth policy")?;
+        if config.auth.mode == AuthMode::Cps {
+            // Begin synchronizing now; ingestion never waits for it.
+            chains.prefetch(config.blockchain.endpoint.as_deref());
+        }
         let dedup = DedupCache::new(
             config.pipeline.dedup_capacity,
             Duration::from_secs(config.pipeline.dedup_ttl_secs),
         );
-        let pipeline = Pipeline::new(policy, dedup, sinks);
+        let pipeline = Pipeline::new(policy, dedup, sinks).with_auth_limits(AuthLimits {
+            max_concurrent: config.auth.cps_max_concurrent_lookups,
+            max_pending: config.auth.cps_max_pending,
+        });
         let pipeline_shutdown = controller.subscribe();
         tasks.push(tokio::spawn(pipeline.run(ingress_rx, pipeline_shutdown)));
 
@@ -302,7 +313,7 @@ async fn spawn_anchoring(
     tasks.push(tokio::spawn(batcher.run(batcher_shutdown)));
 
     let chain = ChainConfig {
-        endpoint: blockchain.endpoint.clone(),
+        endpoint: config.blockchain.endpoint.clone(),
         suri,
         node: NodeId(node_id),
         retry: RetryPolicy {

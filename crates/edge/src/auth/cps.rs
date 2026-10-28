@@ -145,15 +145,21 @@ impl CpsAuth {
         }
     }
 
-    /// Build the policy from `[auth]`, reading the chain through `chains`.
+    /// Build the policy from `[auth]`, reading the chain at `endpoint` (`None`:
+    /// the embedded light client) through `chains`.
     ///
-    /// Nothing is connected here: the chain is reached on the first lookup, so
-    /// an unreachable chain never blocks startup and never opens the gateway.
+    /// Nothing is connected here: the chain is reached on the first lookup (or
+    /// by [`ChainRegistry::prefetch`]), so an unreachable chain never blocks
+    /// startup and never opens the gateway.
     ///
     /// # Errors
     ///
     /// A description of the offending `[auth]` setting.
-    pub fn from_config(config: &AuthConfig, chains: Arc<ChainRegistry>) -> Result<Self, String> {
+    pub fn from_config(
+        config: &AuthConfig,
+        endpoint: Option<&str>,
+        chains: Arc<ChainRegistry>,
+    ) -> Result<Self, String> {
         let root = NodeId(
             config
                 .cps_root_node_id
@@ -164,7 +170,7 @@ impl CpsAuth {
             .ok_or("auth.cps_cache_capacity must be greater than zero")?;
         let reader = LibcpsReader {
             chains,
-            endpoint: config.cps_endpoint.clone(),
+            endpoint: endpoint.map(str::to_owned),
             expected_genesis,
             root,
         };
@@ -255,13 +261,20 @@ impl AuthPolicy for CpsAuth {
         AuthMode::Cps
     }
 
+    fn try_authorize(&self, sensor_id: &SensorId) -> Option<bool> {
+        let allowed = self.cached(sensor_id.as_bytes())?;
+        let decision = if allowed { "allow" } else { "deny" };
+        metrics::counter!(AUTH_CPS_CACHE_HIT_TOTAL, "decision" => decision).increment(1);
+        Some(allowed)
+    }
+
     async fn authorize(&self, sensor_id: &SensorId) -> Result<bool, AuthError> {
-        let key = *sensor_id.as_bytes();
-        if let Some(allowed) = self.cached(&key) {
-            let decision = if allowed { "allow" } else { "deny" };
-            metrics::counter!(AUTH_CPS_CACHE_HIT_TOTAL, "decision" => decision).increment(1);
+        // The pipeline normally got here after a miss, but another lookup may
+        // have filled the cache in the meantime.
+        if let Some(allowed) = self.try_authorize(sensor_id) {
             return Ok(allowed);
         }
+        let key = *sensor_id.as_bytes();
         metrics::counter!(AUTH_CPS_CACHE_MISS_TOTAL).increment(1);
 
         let allowed = tokio::time::timeout(self.query_timeout, self.lookup(sensor_id))
@@ -281,10 +294,12 @@ struct LibcpsReader {
 }
 
 impl LibcpsReader {
-    async fn chain(&self) -> Result<Arc<crate::chain::Chain>, AuthError> {
+    /// The shared connection if it is ready; never waits for it, so a chain
+    /// that is still synchronizing fails the lookup (closed) at once instead of
+    /// holding a lookup slot, and the shared initialization is never touched.
+    fn chain(&self) -> Result<Arc<crate::chain::Chain>, AuthError> {
         self.chains
-            .get(self.endpoint.as_deref())
-            .await
+            .try_get(self.endpoint.as_deref())
             .map_err(|e| AuthError::Unavailable(e.to_string()))
     }
 }
@@ -292,7 +307,7 @@ impl LibcpsReader {
 #[async_trait]
 impl CpsReader for LibcpsReader {
     async fn verify(&self) -> Result<(), AuthError> {
-        let chain = self.chain().await?;
+        let chain = self.chain()?;
         let actual = chain.cps().genesis_hash().0;
         if actual != self.expected_genesis {
             return Err(AuthError::ChainMismatch {
@@ -308,7 +323,7 @@ impl CpsReader for LibcpsReader {
     }
 
     async fn snapshot(&self) -> Result<Box<dyn CpsSnapshot>, AuthError> {
-        let chain = self.chain().await?;
+        let chain = self.chain()?;
         let at = chain.cps().finalized().await.map_err(lookup_error)?;
         Ok(Box::new(LibcpsSnapshot { at }))
     }
@@ -346,6 +361,7 @@ fn lookup_error(error: libcps::Error) -> AuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::AuthLimits;
     use crate::protocol::SensorIdentity;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -681,12 +697,215 @@ mod tests {
             cps_expected_genesis_hash: Some(format!("0x{}", "11".repeat(32))),
             ..AuthConfig::default()
         };
-        assert!(CpsAuth::from_config(&config, chains.clone()).is_ok());
+        assert!(CpsAuth::from_config(&config, None, chains.clone()).is_ok());
 
         config.cps_cache_capacity = 0;
-        assert!(CpsAuth::from_config(&config, chains.clone()).is_err());
+        assert!(CpsAuth::from_config(&config, None, chains.clone()).is_err());
         config.cps_cache_capacity = 1;
         config.cps_expected_genesis_hash = None;
-        assert!(CpsAuth::from_config(&config, chains).is_err());
+        assert!(CpsAuth::from_config(&config, None, chains).is_err());
+    }
+
+    /// A reader whose snapshots wait for permits, to hold lookups open.
+    struct SlowReader {
+        inner: MockReader,
+        gate: Arc<tokio::sync::Semaphore>,
+        running: AtomicUsize,
+        max_running: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CpsReader for Arc<SlowReader> {
+        async fn verify(&self) -> Result<(), AuthError> {
+            self.inner.verify().await
+        }
+
+        async fn snapshot(&self) -> Result<Box<dyn CpsSnapshot>, AuthError> {
+            let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_running.fetch_max(now, Ordering::SeqCst);
+            self.gate.acquire().await.unwrap().forget();
+            self.running.fetch_sub(1, Ordering::SeqCst);
+            self.inner.snapshot().await
+        }
+    }
+
+    /// A CPS policy over a chain whose lookups stay open until released.
+    fn slow_policy(chain: &Arc<MockChain>) -> (Arc<CpsAuth>, Arc<SlowReader>) {
+        let reader = Arc::new(SlowReader {
+            inner: MockReader(chain.clone()),
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            running: AtomicUsize::new(0),
+            max_running: AtomicUsize::new(0),
+        });
+        let policy = CpsAuth::new(
+            Arc::new(reader.clone()),
+            ROOT,
+            NonZeroUsize::new(64).unwrap(),
+            Duration::from_secs(60),
+            Duration::from_secs(5),
+        );
+        (Arc::new(policy), reader)
+    }
+
+    /// Run `messages` through a pipeline over `policy`; returns the delivery
+    /// receiver and the ingress sender.
+    fn run_pipeline(
+        policy: Arc<CpsAuth>,
+        limits: AuthLimits,
+    ) -> (
+        crate::ingress::IngressSender,
+        tokio::sync::mpsc::Receiver<Arc<crate::pipeline::AcceptedMessage>>,
+        crate::shutdown::ShutdownController,
+    ) {
+        struct Shared(Arc<CpsAuth>);
+
+        #[async_trait]
+        impl AuthPolicy for Shared {
+            fn mode(&self) -> AuthMode {
+                AuthMode::Cps
+            }
+
+            fn try_authorize(&self, sensor_id: &SensorId) -> Option<bool> {
+                self.0.try_authorize(sensor_id)
+            }
+
+            async fn authorize(&self, sensor_id: &SensorId) -> Result<bool, AuthError> {
+                self.0.authorize(sensor_id).await
+            }
+        }
+
+        let (sink, delivered) = crate::pipeline::ChannelSink::new("test", 256);
+        let pipeline = crate::pipeline::Pipeline::new(
+            Box::new(Shared(policy)),
+            crate::pipeline::DedupCache::new(256, Duration::from_secs(60)),
+            vec![Box::new(sink)],
+        )
+        .with_auth_limits(limits);
+        let (tx, rx) = crate::ingress::channel(256);
+        let controller = crate::shutdown::ShutdownController::new();
+        tokio::spawn(pipeline.run(rx, controller.subscribe()));
+        (tx, delivered, controller)
+    }
+
+    fn message(seed: u8, payload: &[u8]) -> crate::ingress::IngressMessage {
+        use crate::protocol::{encode_envelope, sign_message, SignOptions};
+        let identity = SensorIdentity::from_secret_bytes(&[seed; 32]);
+        let envelope = sign_message(&identity, payload, SignOptions::default());
+        crate::ingress::IngressMessage {
+            raw_envelope: bytes::Bytes::from(encode_envelope(&envelope)),
+            envelope,
+            transport: crate::ingress::TransportMetadata::http(None),
+            received_at: std::time::SystemTime::now(),
+        }
+    }
+
+    async fn delivered_from(
+        delivered: &mut tokio::sync::mpsc::Receiver<Arc<crate::pipeline::AcceptedMessage>>,
+    ) -> SensorId {
+        tokio::time::timeout(Duration::from_secs(5), delivered.recv())
+            .await
+            .expect("delivered in time")
+            .expect("sink open")
+            .sensor_id
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn a_slow_chain_miss_does_not_delay_a_cached_sensor() {
+        let chain = MockChain::new();
+        let (cached, fresh) = (sensor(1), sensor(2));
+        chain.bind(&cached, 2);
+        chain.bind(&fresh, 3);
+        let (policy, reader) = slow_policy(&chain);
+
+        reader.gate.add_permits(1);
+        assert!(policy.authorize(&cached).await.unwrap());
+        assert_eq!(chain.snapshots(), 1);
+
+        let (tx, mut delivered, _controller) = run_pipeline(policy, AuthLimits::default());
+        tx.send(message(2, b"waits for the chain")).await.unwrap();
+        tx.send(message(1, b"cached")).await.unwrap();
+
+        assert_eq!(delivered_from(&mut delivered).await, cached);
+        assert!(delivered.try_recv().is_err(), "the miss is still pending");
+
+        reader.gate.add_permits(1);
+        assert_eq!(delivered_from(&mut delivered).await, fresh);
+    }
+
+    #[tokio::test]
+    async fn concurrent_misses_cause_a_single_chain_query() {
+        let chain = MockChain::new();
+        let id = sensor(1);
+        chain.bind(&id, 2);
+        let (policy, reader) = slow_policy(&chain);
+        let (tx, mut delivered, _controller) = run_pipeline(policy.clone(), AuthLimits::default());
+
+        for n in 0..20u8 {
+            tx.send(message(1, &[n])).await.unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        reader.gate.add_permits(100);
+
+        for _ in 0..20 {
+            assert_eq!(delivered_from(&mut delivered).await, id);
+        }
+        assert_eq!(chain.snapshots(), 1);
+        assert_eq!(chain.verifies.load(Ordering::SeqCst), 1);
+        assert_eq!(policy.cached_entries(), 1);
+    }
+
+    #[tokio::test]
+    async fn chain_queries_stay_within_the_configured_concurrency() {
+        let chain = MockChain::new();
+        for seed in 0..40u8 {
+            chain.bind(&sensor(seed), 2);
+        }
+        let (policy, reader) = slow_policy(&chain);
+        let limits = AuthLimits {
+            max_concurrent: 4,
+            max_pending: 40,
+        };
+        let (tx, mut delivered, _controller) = run_pipeline(policy, limits);
+
+        for seed in 0..40u8 {
+            tx.send(message(seed, b"burst")).await.unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(reader.running.load(Ordering::SeqCst), 4);
+
+        reader.gate.add_permits(100);
+        for _ in 0..40 {
+            delivered_from(&mut delivered).await;
+        }
+        assert_eq!(reader.max_running.load(Ordering::SeqCst), 4);
+        assert_eq!(chain.snapshots(), 40);
+    }
+
+    #[tokio::test]
+    async fn an_unsynchronized_chain_fails_closed_without_caching_or_waiting() {
+        // Nothing listens on this port: the shared connection never gets ready.
+        let config = AuthConfig {
+            mode: AuthMode::Cps,
+            cps_root_node_id: Some(1),
+            cps_expected_genesis_hash: Some(format!("0x{}", "00".repeat(32))),
+            ..AuthConfig::default()
+        };
+        let policy = CpsAuth::from_config(
+            &config,
+            Some("ws://127.0.0.1:1"),
+            Arc::new(ChainRegistry::new()),
+        )
+        .unwrap();
+
+        for _ in 0..3 {
+            let started = Instant::now();
+            assert!(matches!(
+                policy.authorize(&sensor(1)).await,
+                Err(AuthError::Unavailable(_))
+            ));
+            assert!(started.elapsed() < Duration::from_secs(1), "must not wait");
+        }
+        assert_eq!(policy.cached_entries(), 0, "no denial is remembered");
     }
 }

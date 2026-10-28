@@ -136,8 +136,9 @@ fn annotate_auth_section(rendered: &str) -> String {
     const COMMENT: &str = "# Authentication. mode = \"none\" | \"whitelist\" | \"cps\".\n\
          # \"cps\" authorizes sensors whose CPS node is a strict descendant of\n\
          # `cps_root_node_id` (the sensors.social node) and requires\n\
-         # `cps_expected_genesis_hash`; without `cps_endpoint` an embedded light\n\
-         # client is used. Allows are cached in memory until eviction or restart,\n\
+         # `cps_expected_genesis_hash`; without `[blockchain] endpoint`\n\
+         # an embedded light client is used. Allows are cached\n\
+         # in memory until eviction or restart,\n\
          # denials for `cps_negative_ttl_secs`; lookup failures are never cached.\n";
     let mut out = String::with_capacity(rendered.len() + COMMENT.len());
     let mut annotated = false;

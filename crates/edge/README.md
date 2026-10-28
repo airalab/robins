@@ -194,10 +194,11 @@ A fully commented example lives at [`examples/gateway.toml`](examples/gateway.to
 |              | `file`                | —                            | Whitelist file (required for `whitelist`).             |
 |              | `cps_root_node_id`    | —                            | CPS `NodeId` of `sensors.social` (required for `cps`). |
 |              | `cps_expected_genesis_hash` | —                      | Expected chain genesis hash, `0x` + 64 hex (required for `cps`). |
-|              | `cps_endpoint`        | —                            | Optional `ws://`/`wss://` RPC endpoint; omit for the embedded light client. |
 |              | `cps_cache_capacity`  | `8192`                       | Total cached allow + deny decisions.                   |
 |              | `cps_negative_ttl_secs` | `60`                       | How long a denial is cached.                           |
-|              | `cps_query_timeout_secs` | `10`                      | Timeout of one CPS lookup.                             |
+|              | `cps_query_timeout_secs` | `10`                      | Timeout of one CPS lookup on a ready connection.       |
+|              | `cps_max_concurrent_lookups` | `8`                   | Most CPS lookups running at once.                      |
+|              | `cps_max_pending`     | `256`                        | Most messages waiting for a CPS lookup; more are dropped. |
 | `[pubsub]`   | `enabled`             | `true`                       | Enable the GossipSub publisher.                        |
 |              | `listen`              | `["/ip4/0.0.0.0/tcp/64442"]` | libp2p listen multiaddrs (TCP, `/ws`, `/quic-v1`).   |
 |              | `topic`               | `sensors.social/v1`          | Topic accepted envelopes are published to.             |
@@ -239,16 +240,33 @@ unbound identities and nodes outside the subtree are rejected.
 mode = "cps"
 cps_root_node_id = 12345
 cps_expected_genesis_hash = "0x..."   # intended network
-# cps_endpoint = "wss://..."          # omit for the embedded light client
 ```
 
 - Authorization runs in the shared pipeline right after signature verification,
   so HTTP and Meshtastic behave identically and a bad signature never causes a
   chain read. The HTTP `202` is still sent when an envelope is enqueued, before
   authorization; unauthorized sensors are dropped, not answered with `403`.
-- Reads are read-only (no key, permit or `[blockchain]` section) and use one
-  finalized snapshot per decision. Without `cps_endpoint` an embedded light
-  client is started on first use and shared with CPS anchoring.
+- Reads are read-only (no key or permit; only the optional `[blockchain] endpoint` is shared) and use one
+  finalized snapshot per decision.
+- Lookups never block the pipeline. A sensor with a cached decision is answered
+  immediately, even while chain queries are outstanding. A cache miss is parked
+  and looked up by a bounded stage: at most `cps_max_concurrent_lookups` (`8`)
+  queries run at once, messages from the same sensor share one query
+  (singleflight), and at most `cps_max_pending` (`256`) messages wait. Beyond
+  that, messages from sensors without a cached decision are dropped
+  (`edge_auth_pending_dropped_total`) while cached sensors keep flowing. Only
+  verified and authorized envelopes reach deduplication and the sinks.
+- One light client serves both authorization and anchoring. The shared
+  `ChainRegistry` owns each connection: it connects, waits for the embedded
+  light client to synchronize, retries failures and reconnects if the light
+  client stops. While the chain is still synchronizing or unavailable, uncached
+  sensors fail closed immediately (no denial is cached) and cached allows keep
+  working. `cps_query_timeout_secs` applies to a query on a ready connection
+  and never cancels or restarts the shared synchronization.
+- Choosing the endpoint: authorization and anchoring have no endpoints of their
+  own; both use `[blockchain] endpoint` (set it even when anchoring is
+  disabled) and therefore share one connection. Without it both share one
+  embedded light client.
 - The configured genesis hash and root node are verified before any decision;
   an unreachable, unsynchronized or wrong chain never opens the gateway.
 - Decisions are kept in one bounded in-memory LRU (`cps_cache_capacity` entries
@@ -261,7 +279,8 @@ cps_expected_genesis_hash = "0x..."   # intended network
   is evicted or the gateway restarts; CPS nodes are normally not removed.
 - Metrics: `edge_auth_rejected_total`, `edge_auth_cps_cache_hit_total{decision}`,
   `edge_auth_cps_cache_miss_total`, `edge_auth_cps_lookup_error_total`,
-  `edge_auth_cps_cache_entries`.
+  `edge_auth_cps_cache_entries`, `edge_auth_pending_dropped_total`,
+  `edge_auth_pending`, `edge_auth_lookups_in_flight`.
 
 ### Durable batching and CPS anchoring
 
@@ -310,7 +329,7 @@ anchor, leaves the batch stored, and is logged and counted in
 |                | `max_messages`         | `100`         | Max envelopes per batch.                                         |
 |                | `compression`          | `"zstd"`      | `"zstd"` or `"none"`.                                            |
 | `[blockchain]` | `enabled`              | `false`       | Enable durable batching and CPS anchoring.                       |
-|                | `endpoint`             | —             | Robonomics RPC endpoint (`ws://` / `wss://`); required.          |
+|                | `endpoint`             | —             | Chain RPC endpoint (`ws://` / `wss://`) shared with CPS auth; omit for the embedded light client. |
 |                | `key_file`             | —             | File with the anchoring account secret URI; required.            |
 |                | `node_id`              | —             | CPS node receiving batches (account needs write access); required. |
 |                | `retry_min_secs`       | `1`           | First retry delay after a transient chain failure.               |
@@ -333,4 +352,11 @@ across a restart. `tests/durable_anchoring.rs` covers the durable
 batching pipeline end to end — restarts between persistence, batching and
 anchoring, exact-byte resubmission, original-receive-time ageing and the
 format-change guard — against a recording CPS target, plus the fully wired
-daemon with the chain unreachable.
+daemon with the chain unreachable. `tests/cps_auth_live.rs` checks CPS
+authorization over real `libcps` (finalized snapshot → identity-to-node lookup
+→ parent traversal) and needs a dev node, so it is `#[ignore]`d:
+
+```sh
+LIBCPS_TEST_WS=ws://127.0.0.1:9944 \
+    nix develop --command cargo test -p edge --test cps_auth_live -- --ignored
+```

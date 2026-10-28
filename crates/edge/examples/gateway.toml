@@ -42,10 +42,11 @@ mode = "none"
 # HTTP 202 reply is sent on enqueue, before authorization.
 # cps_root_node_id = 12345            # CPS NodeId of sensors.social
 # cps_expected_genesis_hash = "0x..." # required; selects the intended network
-# cps_endpoint = "wss://..."          # omit to use the embedded light client
 # cps_cache_capacity = 8192           # total allow + deny entries
 # cps_negative_ttl_secs = 60
-# cps_query_timeout_secs = 10
+# cps_query_timeout_secs = 10         # one lookup on a ready connection
+# cps_max_concurrent_lookups = 8      # chain queries running at once
+# cps_max_pending = 256               # messages waiting for a lookup; more are dropped
 
 # --- GossipSub publisher ----------------------------------------------------
 # Publishes accepted envelopes to the libp2p pub/sub mesh.
@@ -125,7 +126,11 @@ compression = "zstd"
 
 [blockchain]
 enabled = false
-# endpoint = "ws://127.0.0.1:9944"
+# RPC endpoint shared by CPS authorization (`[auth] mode = "cps"`) and
+# anchoring: both use one connection to it. Omit to use a single embedded
+# light client for both, started on first use and synchronized in the
+# background; uncached sensors are rejected until it is ready.
+# endpoint = "wss://rpc.example"
 # File containing the anchoring account secret URI.
 # key_file = "/etc/edge/secrets/anchor-key"
 # CPS node receiving the batches; the account needs write access to it.
