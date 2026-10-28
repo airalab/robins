@@ -4157,6 +4157,7 @@ dependencies = [
  "hex",
  "libcps",
  "libp2p 0.57.1",
+ "lru 0.16.4",
  "meshtastic",
  "metrics",
  "metrics-exporter-prometheus",

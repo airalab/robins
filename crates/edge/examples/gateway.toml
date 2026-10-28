@@ -28,9 +28,24 @@ max_body_bytes = 65536
 # Applied after cryptographic/protocol validation.
 #   mode = "none"      -> accept every valid envelope.
 #   mode = "whitelist" -> accept only sensor ids listed in `file`.
+#   mode = "cps"       -> accept only sensors whose CPS node is a strict
+#                         descendant of the sensors.social root node.
 [auth]
 mode = "none"
 # file = "/etc/edge/whitelist.txt"
+
+# CPS subtree authorization (mode = "cps"). Read-only: needs no key or
+# [blockchain] section. Decisions are cached in memory only (never in redb):
+# allows until eviction or restart, denials for cps_negative_ttl_secs, and
+# lookup failures (RPC, timeout, wrong chain, corrupted tree) never. A sensor
+# not in the cache is rejected while the chain is unreachable. Note that the
+# HTTP 202 reply is sent on enqueue, before authorization.
+# cps_root_node_id = 12345            # CPS NodeId of sensors.social
+# cps_expected_genesis_hash = "0x..." # required; selects the intended network
+# cps_endpoint = "wss://..."          # omit to use the embedded light client
+# cps_cache_capacity = 8192           # total allow + deny entries
+# cps_negative_ttl_secs = 60
+# cps_query_timeout_secs = 10
 
 # --- GossipSub publisher ----------------------------------------------------
 # Publishes accepted envelopes to the libp2p pub/sub mesh.

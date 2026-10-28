@@ -190,8 +190,14 @@ A fully commented example lives at [`examples/gateway.toml`](examples/gateway.to
 | `[http]`     | `enabled`             | `true`                       | Enable the HTTP ingress transport.                     |
 |              | `listen`              | `127.0.0.1:3000`             | Ingress bind address (`POST /v1/telemetry`); loopback by default. |
 |              | `max_body_bytes`      | `65536`                      | Reject request bodies larger than this.                |
-| `[auth]`     | `mode`                | `none`                       | `none` accepts all valid envelopes; `whitelist` gates. |
+| `[auth]`     | `mode`                | `none`                       | `none` accepts all valid envelopes; `whitelist` and `cps` gate. |
 |              | `file`                | —                            | Whitelist file (required for `whitelist`).             |
+|              | `cps_root_node_id`    | —                            | CPS `NodeId` of `sensors.social` (required for `cps`). |
+|              | `cps_expected_genesis_hash` | —                      | Expected chain genesis hash, `0x` + 64 hex (required for `cps`). |
+|              | `cps_endpoint`        | —                            | Optional `ws://`/`wss://` RPC endpoint; omit for the embedded light client. |
+|              | `cps_cache_capacity`  | `8192`                       | Total cached allow + deny decisions.                   |
+|              | `cps_negative_ttl_secs` | `60`                       | How long a denial is cached.                           |
+|              | `cps_query_timeout_secs` | `10`                      | Timeout of one CPS lookup.                             |
 | `[pubsub]`   | `enabled`             | `true`                       | Enable the GossipSub publisher.                        |
 |              | `listen`              | `["/ip4/0.0.0.0/tcp/64442"]` | libp2p listen multiaddrs (TCP, `/ws`, `/quic-v1`).   |
 |              | `topic`               | `sensors.social/v1`          | Topic accepted envelopes are published to.             |
@@ -220,6 +226,42 @@ accepted as Connectivity Protocol ingress — this mirrors the PKI-authenticatio
 requirement in the Transport v1 spec (`src/protobufs/transport/meshtastic/v1.md`).
 The adapter owns its own connect/reconnect loop, so a missing or disconnected
 radio never blocks daemon startup or the HTTP ingress path.
+
+### CPS subtree authorization
+
+`[auth] mode = "cps"` authorizes a verified sensor when its public key is bound
+to a CPS node that is a **strict descendant** of the configured
+`cps_root_node_id` (the `sensors.social` node), at any depth. The root itself,
+unbound identities and nodes outside the subtree are rejected.
+
+```toml
+[auth]
+mode = "cps"
+cps_root_node_id = 12345
+cps_expected_genesis_hash = "0x..."   # intended network
+# cps_endpoint = "wss://..."          # omit for the embedded light client
+```
+
+- Authorization runs in the shared pipeline right after signature verification,
+  so HTTP and Meshtastic behave identically and a bad signature never causes a
+  chain read. The HTTP `202` is still sent when an envelope is enqueued, before
+  authorization; unauthorized sensors are dropped, not answered with `403`.
+- Reads are read-only (no key, permit or `[blockchain]` section) and use one
+  finalized snapshot per decision. Without `cps_endpoint` an embedded light
+  client is started on first use and shared with CPS anchoring.
+- The configured genesis hash and root node are verified before any decision;
+  an unreachable, unsynchronized or wrong chain never opens the gateway.
+- Decisions are kept in one bounded in-memory LRU (`cps_cache_capacity` entries
+  for allows and denials together; never written to `redb`). Allows stay until
+  eviction or restart, denials for `cps_negative_ttl_secs`. RPC errors,
+  timeouts and corrupted ancestry are never cached; the envelope is dropped and
+  `edge_auth_cps_lookup_error_total` increments.
+- During a chain outage a cached allow keeps working, an uncached sensor fails
+  closed. A CPS node that is moved or removed stays authorized until its entry
+  is evicted or the gateway restarts; CPS nodes are normally not removed.
+- Metrics: `edge_auth_rejected_total`, `edge_auth_cps_cache_hit_total{decision}`,
+  `edge_auth_cps_cache_miss_total`, `edge_auth_cps_lookup_error_total`,
+  `edge_auth_cps_cache_entries`.
 
 ### Durable batching and CPS anchoring
 

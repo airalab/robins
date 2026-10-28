@@ -19,6 +19,7 @@
 
 use super::{Anchor, AnchorError, ChainConfig, LibcpsTarget};
 use crate::batch_store::{BatchStore, StoredBatch};
+use crate::chain::ChainRegistry;
 use crate::observability::metrics::{
     ANCHOR_CONFIRMATION_TOTAL, ANCHOR_FAILURE_TOTAL, ANCHOR_RETRY_TOTAL, ANCHOR_SUBMISSION_TOTAL,
 };
@@ -178,6 +179,15 @@ impl Anchor {
     }
 }
 
+/// Obtain the shared chain connection and verify the anchoring account on it.
+async fn connect_target(
+    chains: &ChainRegistry,
+    chain: &ChainConfig,
+) -> Result<LibcpsTarget, AnchorError> {
+    let connection = chains.get(chain.endpoint.as_deref()).await?;
+    LibcpsTarget::connect(connection, &chain.suri, chain.node).await
+}
+
 /// Connect to the chain (retrying transient failures), then run an
 /// [`Anchor`] over `store` until `shutdown`.
 ///
@@ -186,6 +196,7 @@ impl Anchor {
 /// durably until the chain is back.
 pub async fn run_chain_anchor(
     chain: ChainConfig,
+    chains: Arc<ChainRegistry>,
     store: Arc<dyn BatchStore>,
     ready: Arc<Notify>,
     mut shutdown: ShutdownSignal,
@@ -195,7 +206,7 @@ pub async fn run_chain_anchor(
         let result = tokio::select! {
             biased;
             _ = shutdown.recv() => return,
-            result = LibcpsTarget::connect(chain.endpoint.as_deref(), &chain.suri, chain.node) => result,
+            result = connect_target(&chains, &chain) => result,
         };
         match result {
             Ok(target) => break target,

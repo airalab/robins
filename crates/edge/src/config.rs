@@ -113,10 +113,13 @@ pub enum AuthMode {
     None,
     /// Accept only envelopes whose `sensor_id` is in the whitelist.
     Whitelist,
+    /// Accept only sensors whose CPS node is a strict descendant of the
+    /// configured `sensors.social` root node (see the `cps_*` fields).
+    Cps,
 }
 
 /// Authentication policy configuration (`[auth]`).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuthConfig {
     /// Selected authentication mode.
@@ -124,6 +127,60 @@ pub struct AuthConfig {
     /// Path to a whitelist file (one SS58 or `0x`-prefixed hex `sensor_id`
     /// per line). Required when [`AuthMode::Whitelist`] is selected.
     pub file: Option<PathBuf>,
+    /// CPS node id of the `sensors.social` root. A sensor is authorized when
+    /// its CPS node is a strict descendant of it. Required for [`AuthMode::Cps`].
+    pub cps_root_node_id: Option<u64>,
+    /// Expected genesis hash (`0x` + 64 hex digits) of the CPS chain; guards
+    /// against pointing the gateway at the wrong network. Required for
+    /// [`AuthMode::Cps`].
+    pub cps_expected_genesis_hash: Option<String>,
+    /// Optional RPC endpoint (`ws://` or `wss://`) for CPS lookups. When
+    /// omitted an embedded light client is used.
+    pub cps_endpoint: Option<String>,
+    /// Hard bound on cached authorization decisions (allow and deny combined).
+    pub cps_cache_capacity: usize,
+    /// How long a denial is cached, in seconds. Allows are cached until
+    /// eviction or restart.
+    pub cps_negative_ttl_secs: u64,
+    /// Timeout of one CPS authorization lookup, in seconds.
+    pub cps_query_timeout_secs: u64,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            mode: AuthMode::None,
+            file: None,
+            cps_root_node_id: None,
+            cps_expected_genesis_hash: None,
+            cps_endpoint: None,
+            cps_cache_capacity: 8192,
+            cps_negative_ttl_secs: 60,
+            cps_query_timeout_secs: 10,
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Parse `cps_expected_genesis_hash` into raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a description if the value is missing or not `0x` followed by
+    /// 64 hex digits.
+    pub fn expected_genesis_hash(&self) -> Result<[u8; 32], String> {
+        let raw = self
+            .cps_expected_genesis_hash
+            .as_deref()
+            .ok_or("auth.cps_expected_genesis_hash is required")?;
+        let digits = raw
+            .strip_prefix("0x")
+            .ok_or("auth.cps_expected_genesis_hash must start with \"0x\"")?;
+        let bytes = hex::decode(digits)
+            .map_err(|e| format!("auth.cps_expected_genesis_hash is not valid hex: {e}"))?;
+        <[u8; 32]>::try_from(bytes.as_slice())
+            .map_err(|_| "auth.cps_expected_genesis_hash must be 32 bytes".to_string())
+    }
 }
 
 /// libp2p GossipSub publisher configuration (`[pubsub]`).
@@ -392,6 +449,36 @@ impl Config {
         Ok(config)
     }
 
+    /// Validates the `[auth]` settings of [`AuthMode::Cps`].
+    fn validate_cps_auth(&self) -> Result<(), ConfigError> {
+        let auth = &self.auth;
+        if auth.cps_root_node_id.is_none() {
+            return Err(ConfigError::Invalid(
+                "auth.mode = \"cps\" requires auth.cps_root_node_id".to_string(),
+            ));
+        }
+        auth.expected_genesis_hash().map_err(ConfigError::Invalid)?;
+        if let Some(endpoint) = &auth.cps_endpoint {
+            if !(endpoint.starts_with("ws://") || endpoint.starts_with("wss://")) {
+                return Err(ConfigError::Invalid(
+                    "auth.cps_endpoint must be a ws:// or wss:// URL".to_string(),
+                ));
+            }
+        }
+        for (name, value) in [
+            ("auth.cps_cache_capacity", auth.cps_cache_capacity as u64),
+            ("auth.cps_negative_ttl_secs", auth.cps_negative_ttl_secs),
+            ("auth.cps_query_timeout_secs", auth.cps_query_timeout_secs),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::Invalid(format!(
+                    "{name} must be greater than zero"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Validates cross-field invariants that serde cannot express.
     ///
     /// This backs `edge config check`: it catches missing required fields,
@@ -401,6 +488,9 @@ impl Config {
             return Err(ConfigError::Invalid(
                 "auth.mode = \"whitelist\" requires auth.file".to_string(),
             ));
+        }
+        if self.auth.mode == AuthMode::Cps {
+            self.validate_cps_auth()?;
         }
 
         if self.ipfs.enabled {
@@ -561,6 +651,7 @@ mod tests {
         cfg.auth = AuthConfig {
             mode: AuthMode::Whitelist,
             file: Some("/etc/edge/whitelist.txt".into()),
+            ..AuthConfig::default()
         };
         assert!(!cfg.http_open_relay());
 
@@ -619,9 +710,74 @@ mod tests {
             auth: AuthConfig {
                 mode: AuthMode::Whitelist,
                 file: None,
+                ..AuthConfig::default()
             },
             ..Default::default()
         };
+        assert!(cfg.validate().is_err());
+    }
+
+    fn cps_auth_config() -> Config {
+        Config {
+            auth: AuthConfig {
+                mode: AuthMode::Cps,
+                cps_root_node_id: Some(12345),
+                cps_expected_genesis_hash: Some(format!("0x{}", "ab".repeat(32))),
+                ..AuthConfig::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn cps_auth_valid_config_is_accepted() {
+        cps_auth_config().validate().unwrap();
+        let toml = format!(
+            r#"
+            [auth]
+            mode = "cps"
+            cps_root_node_id = 7
+            cps_expected_genesis_hash = "0x{}"
+            cps_endpoint = "wss://rpc.example"
+            cps_cache_capacity = 16
+        "#,
+            "ab".repeat(32)
+        );
+        let cfg: Config = toml::from_str(&toml).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.auth.mode, AuthMode::Cps);
+        assert_eq!(cfg.auth.cps_negative_ttl_secs, 60);
+    }
+
+    #[test]
+    fn cps_auth_requires_root_and_genesis() {
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_root_node_id = None;
+        assert!(cfg.validate().is_err());
+
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_expected_genesis_hash = None;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn cps_auth_rejects_bad_values() {
+        for genesis in ["ab", "0xzz", "0xabcd"] {
+            let mut cfg = cps_auth_config();
+            cfg.auth.cps_expected_genesis_hash = Some(genesis.into());
+            assert!(cfg.validate().is_err(), "{genesis}");
+        }
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_endpoint = Some("http://rpc".into());
+        assert!(cfg.validate().is_err());
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_cache_capacity = 0;
+        assert!(cfg.validate().is_err());
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_negative_ttl_secs = 0;
+        assert!(cfg.validate().is_err());
+        let mut cfg = cps_auth_config();
+        cfg.auth.cps_query_timeout_secs = 0;
         assert!(cfg.validate().is_err());
     }
 

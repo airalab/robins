@@ -104,6 +104,7 @@ fn generate(output: Option<PathBuf>, force: bool) -> CliResult {
         .map_err(|e| CliError::runtime(format!("default configuration is invalid: {e}")))?;
     let rendered = toml::to_string_pretty(&config)
         .map_err(|e| CliError::runtime(format!("failed to serialize config: {e}")))?;
+    let rendered = annotate_auth_section(&rendered);
     let rendered = annotate_http_section(&rendered);
 
     match output {
@@ -125,6 +126,29 @@ fn generate(output: Option<PathBuf>, force: bool) -> CliResult {
             Ok(())
         }
     }
+}
+
+/// Prepend a comment block documenting the CPS authorization mode to the
+/// `[auth]` table header of a rendered configuration.
+///
+/// Returns the input unchanged if no `[auth]` header is present.
+fn annotate_auth_section(rendered: &str) -> String {
+    const COMMENT: &str = "# Authentication. mode = \"none\" | \"whitelist\" | \"cps\".\n\
+         # \"cps\" authorizes sensors whose CPS node is a strict descendant of\n\
+         # `cps_root_node_id` (the sensors.social node) and requires\n\
+         # `cps_expected_genesis_hash`; without `cps_endpoint` an embedded light\n\
+         # client is used. Allows are cached in memory until eviction or restart,\n\
+         # denials for `cps_negative_ttl_secs`; lookup failures are never cached.\n";
+    let mut out = String::with_capacity(rendered.len() + COMMENT.len());
+    let mut annotated = false;
+    for line in rendered.split_inclusive('\n') {
+        if !annotated && line.trim_end() == "[auth]" {
+            out.push_str(COMMENT);
+            annotated = true;
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 /// Prepend a comment block documenting the ingress route to the `[http]`
@@ -167,5 +191,14 @@ mod tests {
         // Comments must not change the parsed configuration.
         let reparsed: Config = toml::from_str(&annotated).expect("annotated config parses");
         assert_eq!(reparsed.http.listen, Config::default().http.listen);
+    }
+
+    #[test]
+    fn generated_config_documents_cps_auth() {
+        let rendered = toml::to_string_pretty(&Config::default()).unwrap();
+        let annotated = annotate_auth_section(&rendered);
+        assert!(annotated.contains("cps_root_node_id"));
+        let reparsed: Config = toml::from_str(&annotated).expect("annotated config parses");
+        reparsed.validate().expect("generated defaults stay valid");
     }
 }

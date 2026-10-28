@@ -48,6 +48,8 @@ colored = { workspace = true, optional = true }
 zstd.workspace = true
 # Embedded persistent store backing the durable batching pipeline.
 redb.workspace = true
+# Bounded LRU cache for CPS authorization decisions.
+lru.workspace = true
 # CPS anchoring (`Client`, `NodeId::set_payload`/`set_meta`) and, for the CLI,
 # `libcps::crypto::Cipher` to encrypt `private:` sections (ECDH + AEAD).
 libcps = { workspace = true, features = ["light-client"] }

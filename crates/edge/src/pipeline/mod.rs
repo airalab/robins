@@ -24,7 +24,9 @@
 //! 1. **Verify** the Ed25519 signature ([`verify_envelope`]); on failure the
 //!    message is dropped and [`VALIDATION_REJECTED_TOTAL`] is incremented.
 //! 2. **Authorize** the verified `sensor_id` against the configured
-//!    [`AuthPolicy`]; rejects increment [`AUTH_REJECTED_TOTAL`].
+//!    [`AuthPolicy`]; rejects increment [`AUTH_REJECTED_TOTAL`]. A policy that
+//!    cannot decide (e.g. the chain is unreachable) fails closed: the message is
+//!    dropped and [`AUTH_CPS_LOOKUP_ERROR_TOTAL`] is incremented.
 //! 3. **Deduplicate** by [`EnvelopeId`] via a bounded TTL [`DedupCache`];
 //!    duplicates increment [`DEDUP_DROPPED_TOTAL`].
 //! 4. **Fan out** the resulting [`AcceptedMessage`] to every configured
@@ -53,7 +55,8 @@ pub use dedup::DedupCache;
 use crate::auth::AuthPolicy;
 use crate::ingress::{IngressMessage, IngressReceiver, TransportMetadata};
 use crate::observability::metrics::{
-    AUTH_REJECTED_TOTAL, DEDUP_DROPPED_TOTAL, VALIDATION_REJECTED_TOTAL,
+    AUTH_CPS_LOOKUP_ERROR_TOTAL, AUTH_REJECTED_TOTAL, DEDUP_DROPPED_TOTAL,
+    VALIDATION_REJECTED_TOTAL,
 };
 use crate::protocol::{envelope_id, verify_envelope, EnvelopeId, SensorId, SignedEnvelope};
 use crate::shutdown::ShutdownSignal;
@@ -237,10 +240,25 @@ impl Pipeline {
             }
         };
 
-        if !self.auth.authorize(&verified.sensor_id) {
-            metrics::counter!(AUTH_REJECTED_TOTAL, "transport" => transport).increment(1);
-            tracing::debug!(sensor_id = %verified.sensor_id, transport, "rejected: not authorized");
-            return;
+        // A lookup may take a while (chain read); keep shutdown responsive.
+        let decision = tokio::select! {
+            biased;
+            _ = shutdown.recv() => return,
+            decision = self.auth.authorize(&verified.sensor_id) => decision,
+        };
+        match decision {
+            Ok(true) => {}
+            Ok(false) => {
+                metrics::counter!(AUTH_REJECTED_TOTAL, "transport" => transport).increment(1);
+                tracing::debug!(sensor_id = %verified.sensor_id, transport, "rejected: not authorized");
+                return;
+            }
+            Err(err) => {
+                metrics::counter!(AUTH_CPS_LOOKUP_ERROR_TOTAL, "transport" => transport)
+                    .increment(1);
+                tracing::warn!(%err, sensor_id = %verified.sensor_id, transport, "dropped: authorization lookup failed");
+                return;
+            }
         }
 
         let id = envelope_id(&message.raw_envelope);
@@ -411,6 +429,71 @@ mod tests {
 
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].sensor_id, allowed.sensor_id());
+    }
+
+    /// A policy that counts calls and fails for the sensors it is told to.
+    struct ScriptedAuth {
+        calls: Arc<AtomicUsize>,
+        failing: SensorId,
+    }
+
+    #[async_trait]
+    impl AuthPolicy for ScriptedAuth {
+        fn mode(&self) -> crate::config::AuthMode {
+            crate::config::AuthMode::Cps
+        }
+
+        async fn authorize(&self, sensor_id: &SensorId) -> Result<bool, crate::auth::AuthError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if *sensor_id == self.failing {
+                Err(crate::auth::AuthError::Unavailable("chain down".into()))
+            } else {
+                Ok(true)
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_authorization_lookup_drops_the_message() {
+        let healthy = SensorIdentity::from_secret_bytes(&[5u8; 32]);
+        let unlucky = SensorIdentity::from_secret_bytes(&[6u8; 32]);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let policy = ScriptedAuth {
+            calls: calls.clone(),
+            failing: unlucky.sensor_id(),
+        };
+
+        let delivered = run_pipeline(
+            Box::new(policy),
+            vec![
+                ingress_message(&unlucky, b"lost"),
+                ingress_message(&healthy, b"kept"),
+            ],
+        )
+        .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].sensor_id, healthy.sensor_id());
+    }
+
+    #[tokio::test]
+    async fn invalid_signature_never_reaches_the_auth_policy() {
+        let identity = SensorIdentity::from_secret_bytes(&[7u8; 32]);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let policy = ScriptedAuth {
+            calls: calls.clone(),
+            failing: identity.sensor_id(),
+        };
+
+        let delivered = run_pipeline(Box::new(policy), vec![tampered_message(&identity)]).await;
+
+        assert!(delivered.is_empty());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "no lookup before verification"
+        );
     }
 
     #[tokio::test]
