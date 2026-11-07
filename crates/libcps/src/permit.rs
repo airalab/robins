@@ -27,7 +27,7 @@ use crate::{
     identity::{IdentityKey, IdentityScheme},
     types::{AccountId, Hash, IdentityAssignment, IdentityPermit, PermitSignature, ScopeId},
 };
-use parity_scale_codec::Encode;
+use parity_scale_codec::{Compact, Encode};
 use polkadot_sdk::sp_core::{ecdsa, ed25519, sr25519, Pair};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -56,12 +56,13 @@ pub struct IdentityPermitPayload {
 impl IdentityPermitPayload {
     /// The exact bytes to sign: the SCALE encoding of
     /// `(IDENTITY_PERMIT_DOMAIN, genesis_hash, scope, valid_until)`, with the
-    /// domain encoded as `Vec<u8>` (compact length prefix).
+    /// domain encoded as `Vec<u8>` (compact length prefix) and the scope as a
+    /// compact integer, matching the runtime `ScopeId` encoding.
     pub fn signing_bytes(&self) -> Vec<u8> {
         (
             IDENTITY_PERMIT_DOMAIN,
             self.genesis_hash.0,
-            self.scope.0,
+            Compact(self.scope.0),
             self.valid_until,
         )
             .encode()
@@ -229,7 +230,8 @@ mod tests {
         let mut expected = vec![(IDENTITY_PERMIT_DOMAIN.len() as u8) << 2];
         expected.extend_from_slice(IDENTITY_PERMIT_DOMAIN);
         expected.extend_from_slice(&[0xab; 32]);
-        expected.extend_from_slice(&7u64.to_le_bytes());
+        // The runtime `ScopeId` is `#[codec(compact)]`: 7 is a single byte.
+        expected.extend_from_slice(&Compact(7u64).encode());
         expected.extend_from_slice(&1000u32.to_le_bytes());
         assert_eq!(payload().signing_bytes(), expected);
     }

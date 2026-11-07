@@ -1,5 +1,4 @@
 [workspace.package]
-version = "5.1.0"
 edition = "2021"
 authors = ["Airalab <research@robonomics.network>"]
 license = "Apache-2.0"
@@ -98,4 +97,4 @@ libp2p = { version = "0.57.1", features = [
 ] }
 robonomics-chain-spec = "2.0.0"
 robonomics-runtime-subxt-api = "52.1.0"
-libcps = { version = "0.8.0", path = "./crates/libcps", default-features = false }
+libcps = { version = "0.9.0", path = "./crates/libcps", default-features = false }
